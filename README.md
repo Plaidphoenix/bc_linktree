@@ -53,13 +53,6 @@ npm install
 npm run dev:web
 ```
 
-Abra:
-
-```txt
-http://127.0.0.1:5173/@saude
-http://127.0.0.1:5173/login
-```
-
 Credenciais demo:
 
 ```txt
@@ -69,60 +62,6 @@ Admin@123
 
 Se a API nao estiver rodando, a aplicacao usa `localStorage` para manter a demo editavel.
 
-## Rodar como servidor local no computador
-
-Para testar no computador e no celular na mesma rede, use:
-
-```bash
-npm run dev
-```
-
-Isso sobe:
-
-- Frontend em `0.0.0.0:5173`
-- API local em `0.0.0.0:8787`
-- Banco local em `local-data/db.json`
-- Uploads locais em `local-data/uploads`
-
-Nesta maquina, o IP de rede validado nos testes foi:
-
-```txt
-http://10.170.1.10:5173/@saude
-http://10.170.1.10:5173/login
-```
-
-No celular, conecte na mesma rede e abra a URL com o IP do computador. Se recusar conexao, libere as portas `5173` e `8787` no Firewall do Windows para rede privada/corporativa.
-
-Para descobrir o IP novamente:
-
-```powershell
-ipconfig
-```
-
-Procure o `Endereco IPv4` da rede usada pelo celular.
-
-## Rodar com API Cloudflare local
-
-Use Node 22+.
-
-Crie um `.env` a partir do exemplo:
-
-```bash
-cp .env.example .env
-```
-
-```bash
-npm run cf:migrate:local
-npm run dev
-```
-
-O Vite faz proxy de `/api` para `http://127.0.0.1:8787`.
-
-Como o ambiente atual esta com Node 20.17, `npm run dev` usa a API local em Node. Para usar Wrangler, instale Node 22+ e rode:
-
-```bash
-npm run dev:worker
-```
 
 ## Banco de dados
 
@@ -149,61 +88,6 @@ A migration `0002_governance_uploads_auth.sql` adiciona:
 - `password_resets`
 - `uploads`
 
-Para criar um D1 remoto:
-
-```bash
-npx wrangler d1 create linkgov-db
-```
-
-Depois substitua o `database_id` em `wrangler.worker.jsonc` pelo ID retornado e rode:
-
-```bash
-npm run cf:migrate:remote
-```
-
-Para staging/producao:
-
-```bash
-npm run cf:migrate:staging
-npm run cf:migrate:production
-```
-
-## Deploy
-
-### API Worker
-
-```bash
-npm run deploy:api
-```
-
-Ambientes:
-
-```bash
-npm run deploy:api:staging
-npm run deploy:api:production
-```
-
-### Frontend Pages
-
-Atualize `VITE_API_BASE_URL` em `wrangler.pages.jsonc` para a URL real do Worker e rode:
-
-```bash
-npm run deploy:web
-```
-
-Ambientes:
-
-```bash
-npm run deploy:web:staging
-npm run deploy:web:production
-```
-
-Tambem e possivel conectar o repositorio no dashboard do Cloudflare Pages com:
-
-```txt
-Build command: npm run build
-Output directory: dist
-```
 
 ## Estrutura
 
@@ -238,22 +122,12 @@ public/
 - Entradas textuais sao sanitizadas para impedir HTML livre.
 - Uploads aceitam JPG, PNG e WEBP e sao barrados por tamanho/dimensao no frontend, no Worker e na API local.
 
-## Cloudflare, dominio e HTTPS
-
-Veja o passo a passo em:
-
-```txt
-docs/cloudflare-deploy.md
-```
 
 ## Testes
 
 ```bash
-npm run test
+npm run tes
+npm run dev
 ```
 
-O build completo continua em:
 
-```bash
-npm run build
-```
