@@ -7,7 +7,6 @@ Plataforma institucional de agregador de links inspirada no fluxo do Linktree, c
 - Frontend React + Vite + TypeScript.
 - Pagina publica por slug, exemplo: `/@saude` ou `/saude`.
 - Login administrativo com sessao demo.
-- Autenticacao preparada para Cloudflare Access, permitindo gov.br/SSO interno via IdP oficial.
 - Recuperacao de senha por link seguro enviado para e-mail real via webhook configuravel.
 - Painel com Links, Aparencia, Analiticos, Usuarios e Configuracoes.
 - CRUD de links com ativar/desativar, destaque, icones e drag-and-drop.
