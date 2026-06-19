@@ -1,0 +1,64 @@
+{
+  "name": "linkgov-institutional",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Plataforma institucional de agregador de links com painel administrativo e API Cloudflare.",
+  "scripts": {
+    "dev": "concurrently -n API,WEB -c blue,green \"npm:dev:api:local\" \"npm:dev:web\"",
+    "dev:web": "vite --host 0.0.0.0 --port 5173",
+    "dev:api": "npm run dev:api:local",
+    "dev:api:local": "node scripts/local-api.mjs --host 0.0.0.0 --port 8787",
+    "dev:worker": "wrangler dev --config wrangler.worker.jsonc --ip 0.0.0.0 --port 8787 --persist-to ./.wrangler/state",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "preview": "vite preview --host 0.0.0.0 --port 4173",
+    "cf:migrate:local": "wrangler d1 migrations apply linkgov-db --config wrangler.worker.jsonc --local",
+    "cf:migrate:remote": "wrangler d1 migrations apply linkgov-db --config wrangler.worker.jsonc --remote",
+    "cf:migrate:staging": "wrangler d1 migrations apply linkgov-db-staging --config wrangler.worker.jsonc --env staging --remote",
+    "cf:migrate:production": "wrangler d1 migrations apply linkgov-db-production --config wrangler.worker.jsonc --env production --remote",
+    "deploy:api": "wrangler deploy --config wrangler.worker.jsonc",
+    "deploy:api:staging": "wrangler deploy --config wrangler.worker.jsonc --env staging",
+    "deploy:api:production": "wrangler deploy --config wrangler.worker.jsonc --env production",
+    "deploy:web": "vite build && wrangler pages deploy dist --project-name linkgov-institutional",
+    "deploy:web:staging": "vite build && wrangler pages deploy dist --project-name linkgov-institutional --branch staging",
+    "deploy:web:production": "vite build && wrangler pages deploy dist --project-name linkgov-institutional --branch main",
+    "audit": "npm audit --audit-level=low"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "linktree",
+    "governo",
+    "cloudflare",
+    "react",
+    "d1"
+  ],
+  "author": "",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "hono": "^4.12.26",
+    "jose": "^6.2.3",
+    "lucide-react": "^1.21.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260617.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^9.2.3",
+    "jsdom": "^24.1.3",
+    "typescript": "^6.0.3",
+    "vite": "^6.4.3",
+    "vitest": "^4.1.9",
+    "wrangler": "^4.86.0"
+  }
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+tmp/
+.wrangler/
+local-data/
+.dev.vars
+.env
+.env.local
+npm-debug.log*

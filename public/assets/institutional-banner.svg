@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+  <title id="title">Banner institucional</title>
+  <desc id="desc">Composicao abstrata em azul institucional com formas arquitetonicas e linhas de conexao.</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1200" y2="420" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#001e40"/>
+      <stop offset=".55" stop-color="#005db6"/>
+      <stop offset="1" stop-color="#91f4e1"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="185" y1="132" x2="1016" y2="420" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff" stop-opacity=".82"/>
+      <stop offset="1" stop-color="#d6e3fb" stop-opacity=".34"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="420" fill="url(#sky)"/>
+  <path d="M0 326c147-77 318-95 513-53 188 41 320 9 423-64 104-72 190-91 264-71v282H0z" fill="#f8f9ff" opacity=".18"/>
+  <path d="M156 420V189l156-56 148 56v231z" fill="url(#glass)" opacity=".82"/>
+  <path d="M486 420V131h384v289z" fill="#ffffff" opacity=".3"/>
+  <path d="M908 420V215l139-41 98 41v205z" fill="#ffffff" opacity=".22"/>
+  <path d="M202 210h212M202 258h212M202 306h212M202 354h212M543 175h272M543 230h272M543 285h272M543 340h272" stroke="#ffffff" stroke-opacity=".42" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="952" cy="118" r="7" fill="#91f4e1"/>
+  <circle cx="1002" cy="84" r="5" fill="#d5e3ff"/>
+  <circle cx="1074" cy="127" r="8" fill="#ffffff"/>
+  <path d="M952 118l50-34 72 43" stroke="#ffffff" stroke-opacity=".5" stroke-width="3"/>
+  <path d="M93 94h252M93 124h176" stroke="#ffffff" stroke-opacity=".72" stroke-width="12" stroke-linecap="round"/>
+</svg>

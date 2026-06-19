@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320" role="img" aria-labelledby="title desc">
+  <title id="title">Brasao institucional abstrato</title>
+  <desc id="desc">Marca circular azul e verde para perfis publicos institucionais.</desc>
+  <defs>
+    <linearGradient id="bg" x1="42" y1="34" x2="278" y2="286" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#eff4ff"/>
+      <stop offset="1" stop-color="#d6e3fb"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="99" y1="71" x2="221" y2="248" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#005db6"/>
+      <stop offset="1" stop-color="#001e40"/>
+    </linearGradient>
+  </defs>
+  <rect width="320" height="320" rx="160" fill="url(#bg)"/>
+  <circle cx="160" cy="160" r="123" fill="#fff" stroke="#c3c6d1" stroke-width="4"/>
+  <path d="M160 56l96 36v70c0 62-39 104-96 128-57-24-96-66-96-128V92l96-36z" fill="url(#shield)"/>
+  <path d="M160 84l64 24v48c0 42-24 72-64 91-40-19-64-49-64-91v-48l64-24z" fill="#f8f9ff" opacity=".15"/>
+  <path d="M113 161h94M126 133h68M135 190h50" stroke="#fff" stroke-width="14" stroke-linecap="round"/>
+  <path d="M160 112v99" stroke="#91f4e1" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="160" cy="111" r="16" fill="#91f4e1"/>
+</svg>

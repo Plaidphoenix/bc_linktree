@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "linkgov-institutional",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-06-18",
+  "vars": {
+    "VITE_API_BASE_URL": "",
+    "VITE_AUTH_PROVIDER": "local"
+  },
+  "env": {
+    "preview": {
+      "vars": {
+        "VITE_API_BASE_URL": "https://api-staging.seudominio.gov.br",
+        "VITE_AUTH_PROVIDER": "access"
+      }
+    },
+    "production": {
+      "vars": {
+        "VITE_API_BASE_URL": "https://api-links.seudominio.gov.br",
+        "VITE_AUTH_PROVIDER": "access"
+      }
+    }
+  }
+}
