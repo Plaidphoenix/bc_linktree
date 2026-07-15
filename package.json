@@ -17,12 +17,13 @@
     "cf:migrate:remote": "wrangler d1 migrations apply linkgov-db --config wrangler.worker.jsonc --remote",
     "cf:migrate:staging": "wrangler d1 migrations apply linkgov-db-staging --config wrangler.worker.jsonc --env staging --remote",
     "cf:migrate:production": "wrangler d1 migrations apply linkgov-db-production --config wrangler.worker.jsonc --env production --remote",
+    "cf:validate:production": "node scripts/validate-cloudflare-config.mjs production",
     "deploy:api": "wrangler deploy --config wrangler.worker.jsonc",
     "deploy:api:staging": "wrangler deploy --config wrangler.worker.jsonc --env staging",
-    "deploy:api:production": "wrangler deploy --config wrangler.worker.jsonc --env production",
-    "deploy:web": "vite build && wrangler pages deploy dist --project-name linkgov-institutional",
-    "deploy:web:staging": "vite build && wrangler pages deploy dist --project-name linkgov-institutional --branch staging",
-    "deploy:web:production": "vite build && wrangler pages deploy dist --project-name linkgov-institutional --branch main",
+    "deploy:api:production": "npm run cf:validate:production && wrangler deploy --config wrangler.worker.jsonc --env production",
+    "deploy:web": "vite build && wrangler pages deploy dist --project-name bc-linktree",
+    "deploy:web:staging": "vite build && wrangler pages deploy dist --project-name bc-linktree --branch staging",
+    "deploy:web:production": "vite build && wrangler pages deploy dist --project-name bc-linktree --branch main",
     "audit": "npm audit --audit-level=low"
   },
   "engines": {
