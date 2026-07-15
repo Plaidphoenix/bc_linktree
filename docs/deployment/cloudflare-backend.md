@@ -41,7 +41,7 @@ Validated with an isolated Node `v22.23.1` runtime because the system Node is st
 ```text
 npm install: passed, 0 vulnerabilities
 npm run build: passed
-npm run test: passed, 25 tests
+npm run test: passed, 38 tests in 11 files
 npm run audit: passed, 0 vulnerabilities
 Wrangler: 4.102.0
 Production config validator: passed
@@ -57,8 +57,8 @@ Production deployment records:
 Worker deployment: 1b203549-9a18-4203-834a-86daba81f201
 Worker version:    6f3a8a57-4bce-414f-b60b-6780c4da0af7
 Worker created:    2026-07-15 19:32:04 UTC
-Pages deployment:  e53619ad-88a3-4af8-b561-d6cf2e3315e5
-Pages completed:   2026-07-15 19:41:07 UTC
+Pages deployment:  5c6e1de8-3f53-4902-830e-c761f4de8e50
+Pages completed:   2026-07-15 20:33:23 UTC
 ```
 
 ## Migrations reviewed
@@ -163,6 +163,9 @@ Do not paste secret values into chat or store them in `.env`, `package.json`, or
 - Demo fallback and demo credentials are enabled only in Vite development/test mode.
 - Production API failures are shown as connection errors and never mutate demo state silently.
 - `AUTH_PROVIDER=access` no longer accepts legacy local bearer sessions.
+- The frontend recognizes the Cloudflare Access cookie without requiring a local bearer token.
+- Returning to `/login` with a known valid Access session redirects to the last administrative section.
+- The last administrative state remains visible during network loss with all mutations disabled.
 - Password reset tokens are not generated or logged when the email webhook is absent.
 - Access uses the official One-time PIN identity provider and an eight-hour session.
 - The Access policy authenticates OTP identities while D1 remains the authorization source for roles, profile access, and user status.
@@ -204,6 +207,7 @@ Verified on 2026-07-15:
 - A 25-byte synthetic object was written to private R2, read through `/api/assets/*` with the expected ETag and content type, then deleted.
 - Pages routes `/`, `/@saude`, `/@educacao`, and `/admin` returned `200` over HTTPS.
 - The deployed frontend bundle contains the real Worker URL and Access provider configuration.
+- The deployed bundle contains the Access session bootstrap, automatic login redirect, and offline read-only state.
 
 An authenticated administrative read, upload through the browser form, and permission-denied test still require a real OTP session. Do not send the OTP or Access cookies through chat.
 
@@ -217,7 +221,7 @@ VITE_AUTH_PROVIDER=access
 NODE_VERSION=22
 ```
 
-`VITE_*` values are embedded during Vite build. Deployment `e53619ad-88a3-4af8-b561-d6cf2e3315e5` rebuilt the frontend with these values and is active at the stable `pages.dev` URL. Never place tokens or secrets in a `VITE_*` variable.
+`VITE_*` values are embedded during Vite build. Deployment `5c6e1de8-3f53-4902-830e-c761f4de8e50` rebuilt the frontend with these values and the Access session fix, and is active at the stable `pages.dev` URL. Never place tokens or secrets in a `VITE_*` variable.
 
 ## Logs
 
@@ -234,7 +238,7 @@ npx wrangler versions list --config wrangler.worker.jsonc --env production
 npx wrangler rollback 6f3a8a57-4bce-414f-b60b-6780c4da0af7 --config wrangler.worker.jsonc --env production
 ```
 
-Rollback changes Worker code only. It does not roll back D1 migrations or data. Export D1 before a future destructive migration. Pages deployment `e53619ad-88a3-4af8-b561-d6cf2e3315e5` can be rolled back from `Workers & Pages > bc-linktree > Deployments` without changing D1 or R2.
+Rollback changes Worker code only. It does not roll back D1 migrations or data. Export D1 before a future destructive migration. Pages deployment `5c6e1de8-3f53-4902-830e-c761f4de8e50` can be rolled back from `Workers & Pages > bc-linktree > Deployments` without changing D1 or R2.
 
 ## Custom domain later
 
@@ -253,8 +257,10 @@ The infrastructure deployment is complete. The following checks require a human-
 1. Open `https://bc-linktree.pages.dev/login`.
 2. Select `Entrar com codigo por e-mail`.
 3. Authenticate as `rodrigogastudillo@gmail.com` with the one-time code sent by Cloudflare.
-4. Confirm that the admin can switch between both public pages.
-5. Upload one valid avatar or banner and confirm that it remains visible after refreshing the page.
+4. Reopen `/login` and confirm the automatic return to the administrative panel.
+5. Toggle the browser offline and online without logging out; confirm the offline read-only banner and automatic recovery.
+6. Confirm that the admin can switch between both public pages.
+7. Upload one valid avatar or banner and confirm that it remains visible after refreshing the page.
 
 Do not paste the OTP, Access cookie, or JWT into chat. The embedded browser connector failed to initialize during verification with `Cannot redefine property: process`; this is a connector runtime error, not an application or Cloudflare deployment failure.
 
