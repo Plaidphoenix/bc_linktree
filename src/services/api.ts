@@ -1,5 +1,4 @@
 import {
-  DEMO_EMAIL,
   DEMO_PASSWORD,
   seedAnalytics,
   seedLinks,
@@ -7,14 +6,14 @@ import {
   seedState,
   seedUsers
 } from "../data/seed";
+import { runtimeConfig } from "../config/runtime";
 import type { AdminPermissions, AdminState, Analytics, LinkItem, PublicProfile, User, UserStatus } from "../types";
 import { createId } from "../utils/id";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL
-  ? import.meta.env.VITE_API_BASE_URL.replace(/\/$/, "")
-  : null;
+const API_BASE = runtimeConfig.apiBaseUrl;
 const TOKEN_KEY = "linkgov.session";
 const STATE_KEY = "linkgov.demo-state";
+const SELECTED_PROFILE_KEY = "linkgov.selected-profile";
 
 type LoginResult = {
   token: string;
@@ -48,6 +47,19 @@ export const sessionStore = {
   }
 };
 
+export function buildAccessUrl(baseUrl: string | null, path: string) {
+  const base = baseUrl?.trim().replace(/\/$/, "") || "";
+  return `${base}${path}`;
+}
+
+export function getAccessLoginUrl() {
+  return buildAccessUrl(API_BASE, "/api/auth/access/start");
+}
+
+export function getAccessLogoutUrl() {
+  return buildAccessUrl(API_BASE, "/cdn-cgi/access/logout");
+}
+
 export async function login(email: string, password: string): Promise<LoginResult> {
   try {
     const result = await request<LoginResult>("/api/auth/login", {
@@ -57,6 +69,7 @@ export async function login(email: string, password: string): Promise<LoginResul
     sessionStore.setToken(result.token);
     return result;
   } catch (error) {
+    ensureDemoFallbackAllowed(error);
     const localUser = seedUsers.find((user) => user.email.toLowerCase() === email.toLowerCase());
     if (!localUser || password !== DEMO_PASSWORD) {
       throw error instanceof ApiError ? error : new ApiError("Credenciais invalidas.", 401);
@@ -65,7 +78,9 @@ export async function login(email: string, password: string): Promise<LoginResul
     const token = createId("demo");
     sessionStore.setToken(token);
     const stored = readStoredLocalState();
-    writeStoredLocalState({ ...stored, user: localUser, selectedProfileId: defaultProfileForUser(localUser).id });
+    const selectedProfileId = defaultProfileForUser(localUser).id;
+    localStorage.setItem(SELECTED_PROFILE_KEY, selectedProfileId);
+    writeStoredLocalState({ ...stored, user: localUser, selectedProfileId });
     return {
       token,
       expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 8).toISOString(),
@@ -78,7 +93,7 @@ export async function logout() {
   try {
     await request("/api/auth/logout", { method: "POST" });
   } catch {
-    // Local fallback intentionally ignores network errors.
+    // The browser session is cleared even when the remote logout cannot be reached.
   } finally {
     sessionStore.clear();
   }
@@ -90,7 +105,8 @@ export async function requestPasswordReset(email: string) {
       method: "POST",
       body: JSON.stringify({ email })
     });
-  } catch {
+  } catch (error) {
+    ensureDemoFallbackAllowed(error);
     return {
       ok: true,
       message: "Se o e-mail existir, enviaremos um link seguro para cadastrar uma nova senha."
@@ -108,7 +124,8 @@ export async function resetPassword(token: string, password: string) {
 export async function getPublicProfile(slug: string) {
   try {
     return await request<{ profile: PublicProfile; links: LinkItem[] }>(`/api/profiles/${cleanSlug(slug)}`);
-  } catch {
+  } catch (error) {
+    ensureDemoFallbackAllowed(error);
     const stored = readStoredLocalState();
     const profile = stored.profiles.find((item) => item.slug === cleanSlug(slug));
     if (!profile) {
@@ -134,6 +151,7 @@ export async function getAdminState(profileId?: string): Promise<AdminState> {
       persistSelectedProfile(state.profile.id);
       return state;
     }
+    ensureDemoFallbackAllowed(error);
     return buildLocalAdminState(profileId);
   }
 }
@@ -150,6 +168,7 @@ export async function updateProfile(profile: PublicProfile) {
     if (error instanceof ApiError && error.status !== 0) {
       throw error;
     }
+    ensureDemoFallbackAllowed(error);
     replaceLocalProfile(profile);
     return profile;
   }
@@ -189,7 +208,8 @@ export async function createProfile(payload: {
     });
     addLocalProfile(response.profile);
     return response.profile;
-  } catch {
+  } catch (error) {
+    ensureDemoFallbackAllowed(error);
     const stored = readStoredLocalState();
     const title = payload.title.trim() || "Nova pagina publica";
     const profile: PublicProfile = {
@@ -220,7 +240,8 @@ export async function createLink(link: Omit<LinkItem, "id" | "order" | "clicks">
     });
     addLocalLink(response.link);
     return response.link;
-  } catch {
+  } catch (error) {
+    ensureDemoFallbackAllowed(error);
     const stored = readStoredLocalState();
     const next: LinkItem = {
       ...link,
@@ -241,7 +262,8 @@ export async function updateLink(link: LinkItem) {
     });
     replaceLocalLink(response.link);
     return response.link;
-  } catch {
+  } catch (error) {
+    ensureDemoFallbackAllowed(error);
     replaceLocalLink(link);
     return link;
   }
@@ -250,11 +272,13 @@ export async function updateLink(link: LinkItem) {
 export async function deleteLink(id: string) {
   try {
     await request(`/api/admin/links/${id}`, { method: "DELETE" });
-  } catch {
-    // Continue with local state.
+  } catch (error) {
+    ensureDemoFallbackAllowed(error);
   }
-  const stored = readStoredLocalState();
-  writeStoredLocalState({ ...stored, links: stored.links.filter((link) => link.id !== id) });
+  if (runtimeConfig.demoFallbackEnabled) {
+    const stored = readStoredLocalState();
+    writeStoredLocalState({ ...stored, links: stored.links.filter((link) => link.id !== id) });
+  }
 }
 
 export async function reorderLinks(links: LinkItem[], profileId: string) {
@@ -266,7 +290,8 @@ export async function reorderLinks(links: LinkItem[], profileId: string) {
     });
     replaceLocalProfileLinks(profileId, response.links);
     return response.links;
-  } catch {
+  } catch (error) {
+    ensureDemoFallbackAllowed(error);
     replaceLocalProfileLinks(profileId, ordered);
     return ordered;
   }
@@ -280,6 +305,7 @@ export async function getUsers(): Promise<User[]> {
     if (error instanceof ApiError && error.status === 403) {
       throw error;
     }
+    ensureDemoFallbackAllowed(error);
     return readStoredLocalState().users;
   }
 }
@@ -302,7 +328,8 @@ export async function createUser(payload: {
     });
     upsertLocalUser(response.user);
     return response.user;
-  } catch {
+  } catch (error) {
+    ensureDemoFallbackAllowed(error);
     const stored = readStoredLocalState();
     const next: User = {
       id: createId("usr"),
@@ -328,7 +355,8 @@ export async function updateUserStatus(id: string, status: UserStatus): Promise<
     });
     upsertLocalUser(response.user);
     return response.user;
-  } catch {
+  } catch (error) {
+    ensureDemoFallbackAllowed(error);
     const stored = readStoredLocalState();
     const users = stored.users.map((user) => (user.id === id ? { ...user, status, active: status === "active" } : user));
     const updated = users.find((user) => user.id === id);
@@ -340,18 +368,21 @@ export async function updateUserStatus(id: string, status: UserStatus): Promise<
 export async function deleteUser(id: string) {
   try {
     await request(`/api/admin/users/${id}`, { method: "DELETE" });
-  } catch {
-    // Continue with local state.
+  } catch (error) {
+    ensureDemoFallbackAllowed(error);
   }
-  const stored = readStoredLocalState();
-  writeStoredLocalState({ ...stored, users: stored.users.filter((user) => user.id !== id || user.role === "ADMIN") });
+  if (runtimeConfig.demoFallbackEnabled) {
+    const stored = readStoredLocalState();
+    writeStoredLocalState({ ...stored, users: stored.users.filter((user) => user.id !== id || user.role === "ADMIN") });
+  }
 }
 
 export async function getAnalytics(profileId?: string): Promise<Analytics> {
   try {
     const query = profileId ? `?profileId=${encodeURIComponent(profileId)}` : "";
     return await request<Analytics>(`/api/admin/analytics${query}`);
-  } catch {
+  } catch (error) {
+    ensureDemoFallbackAllowed(error);
     const state = buildLocalAdminState(profileId);
     const clicks = state.links.reduce((sum, link) => sum + link.clicks, 0);
     return {
@@ -371,7 +402,8 @@ export async function getAnalytics(profileId?: string): Promise<Analytics> {
 export async function trackClick(link: LinkItem) {
   try {
     await request(`/api/click/${link.id}`, { method: "POST" });
-  } catch {
+  } catch (error) {
+    ensureDemoFallbackAllowed(error);
     replaceLocalLink({ ...link, clicks: link.clicks + 1 });
   }
 }
@@ -394,7 +426,12 @@ async function request<T = unknown>(path: string, init: RequestInit = {}): Promi
       headers
     });
   } catch {
-    throw new ApiError("API local nao esta acessivel. Rode npm run dev ou npm run dev:api:local.", 0);
+    throw new ApiError(
+      runtimeConfig.demoFallbackEnabled
+        ? "API local nao esta acessivel. Rode npm run dev ou npm run dev:api:local."
+        : "Nao foi possivel conectar a API remota. Tente novamente em alguns instantes.",
+      0
+    );
   }
 
   if (!response.ok) {
@@ -403,6 +440,18 @@ async function request<T = unknown>(path: string, init: RequestInit = {}): Promi
   }
 
   return response.json() as Promise<T>;
+}
+
+function ensureDemoFallbackAllowed(error: unknown) {
+  if (runtimeConfig.demoFallbackEnabled) {
+    return;
+  }
+
+  if (error instanceof ApiError) {
+    throw error;
+  }
+
+  throw new ApiError("Nao foi possivel conectar a API remota. Tente novamente em alguns instantes.", 0);
 }
 
 function readStoredLocalState(): StoredLocalState {
@@ -468,11 +517,25 @@ function buildLocalAdminState(profileId?: string): AdminState {
 }
 
 function persistSelectedProfile(profileId: string) {
+  localStorage.setItem(SELECTED_PROFILE_KEY, profileId);
+  if (!runtimeConfig.demoFallbackEnabled) {
+    return;
+  }
+
   const stored = readStoredLocalState();
   writeStoredLocalState({ ...stored, selectedProfileId: profileId });
 }
 
 function readSelectedProfileId() {
+  const selectedProfileId = localStorage.getItem(SELECTED_PROFILE_KEY);
+  if (selectedProfileId) {
+    return selectedProfileId;
+  }
+
+  if (!runtimeConfig.demoFallbackEnabled) {
+    return "";
+  }
+
   try {
     return readStoredLocalState().selectedProfileId;
   } catch {
@@ -481,7 +544,7 @@ function readSelectedProfileId() {
 }
 
 function replaceLocalProfile(profile: PublicProfile | null) {
-  if (!profile) return;
+  if (!runtimeConfig.demoFallbackEnabled || !profile) return;
   const stored = readStoredLocalState();
   writeStoredLocalState({
     ...stored,
@@ -491,7 +554,7 @@ function replaceLocalProfile(profile: PublicProfile | null) {
 }
 
 function addLocalProfile(profile: PublicProfile | null) {
-  if (!profile) return;
+  if (!runtimeConfig.demoFallbackEnabled || !profile) return;
   const stored = readStoredLocalState();
   const exists = stored.profiles.some((item) => item.id === profile.id);
   writeStoredLocalState({
@@ -502,11 +565,13 @@ function addLocalProfile(profile: PublicProfile | null) {
 }
 
 function addLocalLink(link: LinkItem) {
+  if (!runtimeConfig.demoFallbackEnabled) return;
   const stored = readStoredLocalState();
   writeStoredLocalState({ ...stored, links: [...stored.links, link] });
 }
 
 function upsertLocalUser(user: User) {
+  if (!runtimeConfig.demoFallbackEnabled) return;
   const stored = readStoredLocalState();
   const exists = stored.users.some((item) => item.id === user.id);
   writeStoredLocalState({
@@ -516,6 +581,7 @@ function upsertLocalUser(user: User) {
 }
 
 function replaceLocalLink(link: LinkItem) {
+  if (!runtimeConfig.demoFallbackEnabled) return;
   const stored = readStoredLocalState();
   writeStoredLocalState({
     ...stored,
@@ -524,6 +590,7 @@ function replaceLocalLink(link: LinkItem) {
 }
 
 function replaceLocalProfileLinks(profileId: string, links: LinkItem[]) {
+  if (!runtimeConfig.demoFallbackEnabled) return;
   const stored = readStoredLocalState();
   writeStoredLocalState({
     ...stored,

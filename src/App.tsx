@@ -48,6 +48,7 @@ import {
   X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { runtimeConfig } from "./config/runtime";
 import { DEMO_EMAIL, DEMO_PASSWORD } from "./data/seed";
 import {
   createLink,
@@ -55,6 +56,8 @@ import {
   createUser,
   deleteLink,
   deleteUser,
+  getAccessLoginUrl,
+  getAccessLogoutUrl,
   getAdminState,
   getAnalytics,
   getPublicProfile,
@@ -121,13 +124,14 @@ export function App() {
 }
 
 function LoginPage({ navigate }: { navigate: (to: string) => void }) {
-  const [email, setEmail] = useState(DEMO_EMAIL);
-  const [password, setPassword] = useState(DEMO_PASSWORD);
+  const accessLogin = runtimeConfig.authProvider === "access";
+  const [email, setEmail] = useState(runtimeConfig.demoFallbackEnabled ? DEMO_EMAIL : "");
+  const [password, setPassword] = useState(runtimeConfig.demoFallbackEnabled ? DEMO_PASSWORD : "");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
-  const [resetEmail, setResetEmail] = useState(DEMO_EMAIL);
+  const [resetEmail, setResetEmail] = useState(runtimeConfig.demoFallbackEnabled ? DEMO_EMAIL : "");
   const [resetMessage, setResetMessage] = useState("");
   const [resetLoading, setResetLoading] = useState(false);
 
@@ -184,85 +188,114 @@ function LoginPage({ navigate }: { navigate: (to: string) => void }) {
         <div className="login-card">
           <BrandMark />
           <div>
-            <h2 id="login-title">Entrar na conta</h2>
-            <p>Portal de acesso para gestores e administradores institucionais.</p>
+            <h2 id="login-title">{accessLogin ? "Acesso institucional" : "Entrar na conta"}</h2>
+            <p>
+              {accessLogin
+                ? "Receba um codigo temporario no e-mail cadastrado para entrar com seguranca."
+                : "Portal de acesso para gestores e administradores institucionais."}
+            </p>
           </div>
-          <form onSubmit={submit} className="form-stack">
-            <label>
-              <span>E-mail institucional</span>
-              <span className="input-with-icon">
-                <Mail size={18} />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  autoComplete="email"
-                  required
-                />
-              </span>
-            </label>
-            <label>
-              <span>Senha</span>
-              <span className="input-with-icon">
-                <ShieldCheck size={18} />
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  autoComplete="current-password"
-                  required
-                />
-                <button type="button" className="icon-button ghost" onClick={() => setShowPassword((value) => !value)}>
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                  <span className="sr-only">Alternar visibilidade da senha</span>
-                </button>
-              </span>
-            </label>
-            <button type="button" className="text-link align-right" onClick={() => setForgotOpen(true)}>
-              Esqueceu a senha?
-            </button>
-            {error ? <p className="form-error">{error}</p> : null}
-            <button className="primary-action" type="submit" disabled={loading}>
-              {loading ? "Entrando..." : "Entrar no sistema"}
-              <ArrowRight size={18} />
-            </button>
-          </form>
-          <div className="demo-box">
-            <span>Credenciais demo</span>
-            <code>{DEMO_EMAIL}</code>
-            <code>{DEMO_PASSWORD}</code>
-          </div>
-        </div>
-      </section>
-      {forgotOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="modal-card">
-            <h3>Redefinir senha</h3>
-            <p>Informe o e-mail real do usuario para receber um link seguro de cadastro de nova senha.</p>
-            <form className="form-stack" onSubmit={submitPasswordReset}>
+          {accessLogin ? (
+            <div className="form-stack">
+              <a className="primary-action" href={getAccessLoginUrl()}>
+                <KeyRound size={18} /> Entrar com codigo por e-mail
+                <ArrowRight size={18} />
+              </a>
+              <button type="button" className="text-link align-right" onClick={() => setForgotOpen(true)}>
+                Esqueceu a senha?
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={submit} className="form-stack">
               <label>
                 <span>E-mail institucional</span>
                 <span className="input-with-icon">
                   <Mail size={18} />
                   <input
                     type="email"
-                    value={resetEmail}
-                    onChange={(event) => setResetEmail(event.target.value)}
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
                     autoComplete="email"
                     required
                   />
                 </span>
               </label>
-              {resetMessage ? <p className="form-success">{resetMessage}</p> : null}
-              <div className="modal-actions">
-                <button type="button" className="secondary-action" onClick={() => setForgotOpen(false)}>
-                  Cancelar
-                </button>
-                <button className="primary-action compact" type="submit" disabled={resetLoading}>
-                  <Mail size={16} /> {resetLoading ? "Enviando..." : "Enviar link"}
-                </button>
-              </div>
+              <label>
+                <span>Senha</span>
+                <span className="input-with-icon">
+                  <ShieldCheck size={18} />
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    autoComplete="current-password"
+                    required
+                  />
+                  <button type="button" className="icon-button ghost" onClick={() => setShowPassword((value) => !value)}>
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    <span className="sr-only">Alternar visibilidade da senha</span>
+                  </button>
+                </span>
+              </label>
+              <button type="button" className="text-link align-right" onClick={() => setForgotOpen(true)}>
+                Esqueceu a senha?
+              </button>
+              {error ? <p className="form-error">{error}</p> : null}
+              <button className="primary-action" type="submit" disabled={loading}>
+                {loading ? "Entrando..." : "Entrar no sistema"}
+                <ArrowRight size={18} />
+              </button>
             </form>
+          )}
+          {runtimeConfig.demoFallbackEnabled ? (
+            <div className="demo-box">
+              <span>Credenciais demo</span>
+              <code>{DEMO_EMAIL}</code>
+              <code>{DEMO_PASSWORD}</code>
+            </div>
+          ) : null}
+        </div>
+      </section>
+      {forgotOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal-card">
+            <h3>{accessLogin ? "Acesso sem senha" : "Redefinir senha"}</h3>
+            {accessLogin ? (
+              <>
+                <p>O acesso institucional usa um codigo temporario enviado ao e-mail cadastrado. Nao existe senha local para redefinir.</p>
+                <div className="modal-actions">
+                  <button type="button" className="primary-action compact" onClick={() => setForgotOpen(false)}>
+                    Entendi
+                  </button>
+                </div>
+              </>
+            ) : (
+              <form className="form-stack" onSubmit={submitPasswordReset}>
+                <p>Informe o e-mail real do usuario para receber um link seguro de cadastro de nova senha.</p>
+                <label>
+                  <span>E-mail institucional</span>
+                  <span className="input-with-icon">
+                    <Mail size={18} />
+                    <input
+                      type="email"
+                      value={resetEmail}
+                      onChange={(event) => setResetEmail(event.target.value)}
+                      autoComplete="email"
+                      required
+                    />
+                  </span>
+                </label>
+                {resetMessage ? <p className="form-success">{resetMessage}</p> : null}
+                <div className="modal-actions">
+                  <button type="button" className="secondary-action" onClick={() => setForgotOpen(false)}>
+                    Cancelar
+                  </button>
+                  <button className="primary-action compact" type="submit" disabled={resetLoading}>
+                    <Mail size={16} /> {resetLoading ? "Enviando..." : "Enviar link"}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       ) : null}
@@ -521,6 +554,10 @@ function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: st
 
   const exit = async () => {
     await logout();
+    if (runtimeConfig.authProvider === "access") {
+      window.location.assign(getAccessLogoutUrl());
+      return;
+    }
     navigate("/login");
   };
 
@@ -1357,7 +1394,7 @@ const emptyUserForm = {
   username: "",
   role: "EDITOR" as User["role"],
   status: "active" as UserStatus,
-  password: "Admin@123",
+  password: runtimeConfig.authProvider === "local" ? "Admin@1234" : "",
   description: "",
   profileId: "",
   linkIds: [] as string[]
@@ -1496,7 +1533,11 @@ function UsersPage({
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <div className="modal-card wide-modal">
             <h3>Novo usuario</h3>
-            <p>Crie administradores, gestores ou editores locais para teste.</p>
+            <p>
+              {runtimeConfig.authProvider === "access"
+                ? "Cadastre o e-mail que recebera o codigo temporario do acesso institucional."
+                : "Crie administradores, gestores ou editores locais para teste."}
+            </p>
             <form className="form-grid user-form" onSubmit={submitUser}>
               <label>
                 <span>Nome</span>
@@ -1521,10 +1562,18 @@ function UsersPage({
                 <span>Usuario</span>
                 <input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required />
               </label>
-              <label>
-                <span>Senha inicial</span>
-                <input value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required />
-              </label>
+              {runtimeConfig.authProvider === "local" ? (
+                <label>
+                  <span>Senha inicial</span>
+                  <input
+                    type="password"
+                    value={form.password}
+                    onChange={(event) => setForm({ ...form, password: event.target.value })}
+                    minLength={10}
+                    required
+                  />
+                </label>
+              ) : null}
               <label>
                 <span>Papel</span>
                 <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as User["role"] })}>
