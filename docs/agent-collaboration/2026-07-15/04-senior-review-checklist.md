@@ -1,0 +1,21 @@
+# Senior Review Checklist
+
+- [x] O escopo Red Team estava autorizado.
+- [x] Nenhum sistema de produção foi testado.
+- [x] Nenhuma evidência sensível foi publicada.
+- [x] Cada vulnerabilidade confirmada possui uma causa raiz clara.
+- [x] A autorização está aplicada no backend.
+- [x] Os testes de regressão cobrem o comportamento corrigido.
+- [x] O build foi concluído com sucesso.
+- [x] A suíte de testes foi concluída com sucesso.
+- [x] O resultado da auditoria de dependências foi analisado.
+- [x] Alterações de banco de dados são compatíveis e revisáveis; migration 0004 somente invalida autenticação seedada.
+- [x] Nenhuma migration de produção foi executada.
+- [ ] Alterações do Cloudflare foram revisadas por um desenvolvedor sênior.
+- [x] Mudanças em APIs ou comportamento foram documentadas.
+- [x] Alterações de manutenção são pequenas.
+- [x] Mudanças não relacionadas foram excluídas.
+- [x] As instruções de rollback são suficientes.
+- [x] Os riscos residuais estão documentados.
+- [ ] O Antigravity verificou as correções.
+- [ ] Um desenvolvedor sênior aprovou as mudanças.
