@@ -688,6 +688,24 @@ select:focus {
   margin-bottom: 28px;
 }
 
+.connection-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 1160px;
+  margin: -10px 0 22px;
+  padding: 12px 14px;
+  border: 1px solid #d6a637;
+  border-radius: 8px;
+  background: #fff7dc;
+  color: #6b4a00;
+  font-weight: 750;
+}
+
+.connection-banner svg {
+  flex: 0 0 auto;
+}
+
 .admin-header h1 {
   margin: 4px 0 0;
   font-size: clamp(1.28rem, 3vw, 1.8rem);

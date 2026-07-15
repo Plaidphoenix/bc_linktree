@@ -9,6 +9,7 @@ import {
 import { runtimeConfig } from "../config/runtime";
 import type { AdminPermissions, AdminState, Analytics, LinkItem, PublicProfile, User, UserStatus } from "../types";
 import { createId } from "../utils/id";
+import { accessSessionStore } from "./access-session";
 
 const API_BASE = runtimeConfig.apiBaseUrl;
 const TOKEN_KEY = "linkgov.session";
@@ -60,6 +61,12 @@ export function getAccessLogoutUrl() {
   return buildAccessUrl(API_BASE, "/cdn-cgi/access/logout");
 }
 
+export async function getAccessSession() {
+  const result = await request<{ user: User; provider: string }>("/api/auth/access");
+  accessSessionStore.mark(result.user);
+  return result;
+}
+
 export async function login(email: string, password: string): Promise<LoginResult> {
   try {
     const result = await request<LoginResult>("/api/auth/login", {
@@ -96,6 +103,7 @@ export async function logout() {
     // The browser session is cleared even when the remote logout cannot be reached.
   } finally {
     sessionStore.clear();
+    accessSessionStore.clear();
   }
 }
 
@@ -144,11 +152,19 @@ export async function getAdminState(profileId?: string): Promise<AdminState> {
     const query = selectedProfileId ? `?profileId=${encodeURIComponent(selectedProfileId)}` : "";
     const state = await request<AdminState>(`/api/admin/me${query}`);
     persistSelectedProfile(state.profile.id);
+    if (runtimeConfig.authProvider === "access") {
+      accessSessionStore.mark(state.user);
+      accessSessionStore.cacheAdminState(state);
+    }
     return state;
   } catch (error) {
     if (!profileId && selectedProfileId && error instanceof ApiError && (error.status === 403 || error.status === 404)) {
       const state = await request<AdminState>("/api/admin/me");
       persistSelectedProfile(state.profile.id);
+      if (runtimeConfig.authProvider === "access") {
+        accessSessionStore.mark(state.user);
+        accessSessionStore.cacheAdminState(state);
+      }
       return state;
     }
     ensureDemoFallbackAllowed(error);
