@@ -13,7 +13,7 @@ import {
   type PolicyUser
 } from "./policy";
 
-type Bindings = {
+export type Bindings = {
   DB: D1Database;
   ASSETS?: R2Bucket;
   ENVIRONMENT?: string;
@@ -86,13 +86,23 @@ const app = new Hono<AppEnv>();
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
 const MAX_BANNER_BYTES = 4 * 1024 * 1024;
 
+app.use("*", async (c, next) => {
+  const origin = c.req.header("Origin");
+  if (origin && !isAllowedCorsOrigin(origin, c.env)) {
+    return c.json({ error: "Origem nao autorizada." }, 403);
+  }
+
+  await next();
+});
+
 app.use(
   "*",
   cors({
-    origin: (origin) => origin || "*",
+    origin: (origin, c) => (isAllowedCorsOrigin(origin, c.env) ? origin : undefined),
     allowHeaders: ["Content-Type", "Authorization", "Cf-Access-Jwt-Assertion"],
     allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    credentials: true
+    credentials: true,
+    maxAge: 86400
   })
 );
 
@@ -190,6 +200,10 @@ app.get("/api/auth/access", authRequired, async (c) => {
   return c.json({ user: serializeUser(user), provider: getAuthProvider(c.env) });
 });
 
+app.get("/api/auth/access/start", authRequired, (c) => {
+  return c.redirect(`${getAppBaseUrl(c)}/admin/links`, 302);
+});
+
 app.post("/api/auth/logout", authRequired, async (c) => {
   const token = getBearerToken(c.req.header("Authorization"));
   if (token) {
@@ -200,6 +214,13 @@ app.post("/api/auth/logout", authRequired, async (c) => {
 });
 
 app.post("/api/auth/forgot-password", async (c) => {
+  if (getAuthProvider(c.env) === "access") {
+    return c.json({
+      ok: true,
+      message: "Este ambiente usa um codigo temporario enviado por e-mail e nao possui senha local."
+    });
+  }
+
   const body = await c.req.json().catch(() => null);
   const email = sanitizeText(body?.email || "").toLowerCase();
 
@@ -214,21 +235,25 @@ app.post("/api/auth/forgot-password", async (c) => {
     .first<UserRow>();
 
   if (user) {
-    const token = randomToken();
-    const tokenHash = await sha256(token);
-    const expiresAt = new Date(Date.now() + 1000 * 60 * 30).toISOString();
-    const resetUrl = `${getAppBaseUrl(c)}/reset-password?token=${encodeURIComponent(token)}`;
+    const emailConfigured = Boolean(c.env.EMAIL_WEBHOOK_URL);
+    if (emailConfigured) {
+      const token = randomToken();
+      const tokenHash = await sha256(token);
+      const expiresAt = new Date(Date.now() + 1000 * 60 * 30).toISOString();
+      const resetUrl = `${getAppBaseUrl(c)}/reset-password?token=${encodeURIComponent(token)}`;
 
-    await c.env.DB.prepare(
-      `INSERT INTO password_resets (id, user_id, token_hash, expires_at, requested_ip)
-       VALUES (?, ?, ?, ?, ?)`
-    )
-      .bind(crypto.randomUUID(), user.id, tokenHash, expiresAt, c.req.header("CF-Connecting-IP") || "")
-      .run();
+      await c.env.DB.prepare(
+        `INSERT INTO password_resets (id, user_id, token_hash, expires_at, requested_ip)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+        .bind(crypto.randomUUID(), user.id, tokenHash, expiresAt, c.req.header("CF-Connecting-IP") || "")
+        .run();
 
-    await sendPasswordResetEmail(c.env, user.email, user.name, resetUrl);
+      await sendPasswordResetEmail(c.env, user.email, user.name, resetUrl);
+    }
+
     await logAudit(c.env.DB, user, "auth.password_reset.requested", "user", user.id, null, {
-      emailConfigured: Boolean(c.env.EMAIL_WEBHOOK_URL)
+      emailConfigured
     });
   }
 
@@ -239,6 +264,10 @@ app.post("/api/auth/forgot-password", async (c) => {
 });
 
 app.post("/api/auth/reset-password", async (c) => {
+  if (getAuthProvider(c.env) === "access") {
+    return c.json({ error: "Redefinicao de senha local desativada pelo Cloudflare Access." }, 409);
+  }
+
   const body = await c.req.json().catch(() => null);
   const token = String(body?.token || "");
   const password = String(body?.password || "");
@@ -710,12 +739,19 @@ app.post("/api/admin/users", authRequired, async (c) => {
   const status = normalizeStatus(body?.status);
   const email = sanitizeText(body?.email || "").toLowerCase();
   const username = cleanSlug(body?.username || email.split("@")[0] || crypto.randomUUID());
+  const password = String(body?.password || "");
 
   if (!["ADMIN", "GESTOR", "EDITOR"].includes(role) || !email || !username) {
     return c.json({ error: "Dados de usuario invalidos." }, 400);
   }
 
+  if (getAuthProvider(c.env) === "local" && password.length < 10) {
+    return c.json({ error: "A senha inicial deve ter pelo menos 10 caracteres." }, 400);
+  }
+
   const id = crypto.randomUUID();
+  const passwordHash =
+    getAuthProvider(c.env) === "access" ? "CLOUDFLARE_ACCESS_ONLY" : await sha256(password);
   await c.env.DB.prepare(
     `INSERT INTO users (id, name, email, password_hash, username, role, avatar, description, active, status)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -724,7 +760,7 @@ app.post("/api/admin/users", authRequired, async (c) => {
       id,
       sanitizeText(body?.name || "Novo usuario"),
       email,
-      await sha256(String(body?.password || "Admin@123")),
+      passwordHash,
       username,
       role,
       "/assets/crest.svg",
@@ -792,7 +828,12 @@ app.delete("/api/admin/users/:id", authRequired, async (c) => {
     return c.json({ error: "Administradores nao podem ser excluidos." }, 403);
   }
 
-  await c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(id).run();
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      "UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?"
+    ).bind(user.id, id),
+    c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(id)
+  ]);
   await logAudit(c.env.DB, user, "user.deleted", "user", id, null, { role: target.role });
   return c.json({ ok: true });
 });
@@ -966,16 +1007,10 @@ app.get("/api/admin/analytics", authRequired, async (c) => {
 });
 
 async function authRequired(c: Context<AppEnv>, next: Next) {
-  const sessionUser = await authenticateSession(c);
-  if (sessionUser) {
-    c.set("user", sessionUser);
-    await next();
-    return;
-  }
-
-  const accessUser = await authenticateCloudflareAccess(c);
-  if (accessUser) {
-    c.set("user", accessUser);
+  const provider = getAuthProvider(c.env);
+  const user = provider === "access" ? await authenticateCloudflareAccess(c) : await authenticateSession(c);
+  if (user) {
+    c.set("user", user);
     await next();
     return;
   }
@@ -1276,6 +1311,36 @@ function getAuthProvider(env: Bindings) {
   return sanitizeText(env.AUTH_PROVIDER || "local").toLowerCase();
 }
 
+export function isAllowedCorsOrigin(origin: string, env: Pick<Bindings, "APP_BASE_URL" | "ENVIRONMENT">) {
+  const normalizedOrigin = normalizeCorsOrigin(origin);
+  if (!normalizedOrigin) {
+    return false;
+  }
+
+  const environment = sanitizeText(env.ENVIRONMENT || "").toLowerCase();
+  const isDevelopment = environment === "local" || environment === "development" || environment === "test";
+  if (isLoopbackOrigin(normalizedOrigin)) {
+    return isDevelopment;
+  }
+
+  const appOrigin = normalizeCorsOrigin(env.APP_BASE_URL || "");
+  return Boolean(appOrigin && normalizedOrigin === appOrigin);
+}
+
+function normalizeCorsOrigin(value: unknown) {
+  try {
+    const url = new URL(sanitizeText(value));
+    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : "";
+  } catch {
+    return "";
+  }
+}
+
+function isLoopbackOrigin(origin: string) {
+  const hostname = new URL(origin).hostname.toLowerCase();
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
 function normalizeTeamDomain(value: unknown) {
   const text = sanitizeText(value || "");
   if (!text) {
@@ -1294,7 +1359,6 @@ function getAppBaseUrl(c: Context<AppEnv>) {
 
 async function sendPasswordResetEmail(env: Bindings, to: string, name: string, resetUrl: string) {
   if (!env.EMAIL_WEBHOOK_URL) {
-    console.info(`Password reset URL for ${to}: ${resetUrl}`);
     return false;
   }
 
