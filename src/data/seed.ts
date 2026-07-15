@@ -1,7 +1,7 @@
 import type { AdminState, Analytics, LinkItem, PublicProfile, User } from "../types";
 
 export const DEMO_EMAIL = "admin@linkgov.local";
-export const DEMO_PASSWORD = "Admin@123";
+export const DEMO_PASSWORD = import.meta.env.VITE_DEMO_PASSWORD || "";
 
 export const seedUsers: User[] = [
   {

@@ -87,6 +87,8 @@ A migration `0002_governance_uploads_auth.sql` cria:
 
 ## 5. Deploy da API
 
+Use sempre um ambiente explicito. O nome raiz/local do Worker e diferente do nome de producao para que um comando sem `--env` nao substitua o Worker de producao com bindings locais. Ainda assim, deploy depende de revisao humana e dos IDs reais de cada ambiente.
+
 ```bash
 npm run deploy:api:staging
 npm run deploy:api:production
@@ -101,21 +103,34 @@ Os ambientes usam `routes` com `custom_domain: true`. Troque os hostnames placeh
 
 Fonte: [Cloudflare Workers custom domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
 
-## 6. Deploy do frontend Pages
+## 6. Build e deploy do frontend Pages
 
-Atualize `wrangler.pages.jsonc`:
+Variaveis `VITE_*` sao incorporadas durante `vite build`; bindings/vars de runtime do Pages nao alteram o JavaScript ja compilado. O arquivo padrao `wrangler.jsonc` descreve o projeto Pages, enquanto os scripts de build exigem a origem HTTPS real da API e `VITE_AUTH_PROVIDER=access` antes de gerar `dist/`.
 
-```jsonc
-"VITE_API_BASE_URL": "https://api-staging.seudominio.gov.br"
-"VITE_API_BASE_URL": "https://api-links.seudominio.gov.br"
+Exemplo no PowerShell para staging:
+
+```powershell
+$env:VITE_API_BASE_URL="https://api-staging.dominio-real.gov.br"
+$env:VITE_AUTH_PROVIDER="access"
+npm run build:web:staging
 ```
 
-Depois rode:
+Exemplo no PowerShell para producao:
+
+```powershell
+$env:VITE_API_BASE_URL="https://api-links.dominio-real.gov.br"
+$env:VITE_AUTH_PROVIDER="access"
+npm run build:web:production
+```
+
+Valide o artefato e a configuracao do Cloudflare Access antes de qualquer deploy. Depois, com autorizacao humana explicita, use o comando do ambiente correspondente:
 
 ```bash
 npm run deploy:web:staging
 npm run deploy:web:production
 ```
+
+Os scripts falham antes do deploy quando a origem HTTPS ou o provedor Access nao estao declarados. Nao use vars de `wrangler.jsonc` como substituto para as variaveis do ambiente de build.
 
 No dashboard do Cloudflare Pages, adicione os dominios customizados:
 

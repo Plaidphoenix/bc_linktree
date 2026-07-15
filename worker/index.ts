@@ -13,7 +13,7 @@ import {
   type PolicyUser
 } from "./policy";
 
-type Bindings = {
+export type Bindings = {
   DB: D1Database;
   ASSETS?: R2Bucket;
   ENVIRONMENT?: string;
@@ -86,13 +86,23 @@ const app = new Hono<AppEnv>();
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
 const MAX_BANNER_BYTES = 4 * 1024 * 1024;
 
+app.use("*", async (c, next) => {
+  const origin = c.req.header("Origin");
+  if (origin && !isAllowedCorsOrigin(origin, c.env)) {
+    return c.json({ error: "Origem nao autorizada." }, 403);
+  }
+
+  await next();
+});
+
 app.use(
   "*",
   cors({
-    origin: (origin) => origin || "*",
+    origin: (origin, c) => (isAllowedCorsOrigin(origin, c.env) ? origin : undefined),
     allowHeaders: ["Content-Type", "Authorization", "Cf-Access-Jwt-Assertion"],
     allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    credentials: true
+    credentials: true,
+    maxAge: 86400
   })
 );
 
@@ -134,7 +144,7 @@ app.get("/api/assets/*", async (c) => {
 });
 
 app.post("/api/auth/login", async (c) => {
-  if (getAuthProvider(c.env) === "access") {
+  if (getAuthProvider(c.env) !== "local") {
     return c.json(
       {
         error:
@@ -170,13 +180,14 @@ app.post("/api/auth/login", async (c) => {
     return c.json({ error: "Credenciais invalidas." }, 401);
   }
 
-  const token = crypto.randomUUID();
+  const token = randomToken();
+  const tokenHash = await hashSessionToken(token);
   const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 8).toISOString();
   await c.env.DB.prepare("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)")
-    .bind(token, row.id, expiresAt)
+    .bind(tokenHash, row.id, expiresAt)
     .run();
 
-  await logAudit(c.env.DB, row, "auth.login", "session", token, null, { provider: "local" });
+  await logAudit(c.env.DB, row, "auth.login", "session", null, null, { provider: "local" });
 
   return c.json({
     token,
@@ -193,13 +204,20 @@ app.get("/api/auth/access", authRequired, async (c) => {
 app.post("/api/auth/logout", authRequired, async (c) => {
   const token = getBearerToken(c.req.header("Authorization"));
   if (token) {
-    await c.env.DB.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run();
+    await c.env.DB.prepare("DELETE FROM sessions WHERE token = ?").bind(await hashSessionToken(token)).run();
   }
-  await logAudit(c.env.DB, c.get("user"), "auth.logout", "session", token || "access", null, {});
+  await logAudit(c.env.DB, c.get("user"), "auth.logout", "session", null, null, {});
   return c.json({ ok: true });
 });
 
 app.post("/api/auth/forgot-password", async (c) => {
+  if (getAuthProvider(c.env) !== "local") {
+    return c.json({
+      ok: true,
+      message: "Este ambiente usa o provedor institucional e nao possui recuperacao de senha local."
+    });
+  }
+
   const body = await c.req.json().catch(() => null);
   const email = sanitizeText(body?.email || "").toLowerCase();
 
@@ -213,7 +231,7 @@ app.post("/api/auth/forgot-password", async (c) => {
     .bind(email)
     .first<UserRow>();
 
-  if (user) {
+  if (user && c.env.EMAIL_WEBHOOK_URL) {
     const token = randomToken();
     const tokenHash = await sha256(token);
     const expiresAt = new Date(Date.now() + 1000 * 60 * 30).toISOString();
@@ -239,6 +257,10 @@ app.post("/api/auth/forgot-password", async (c) => {
 });
 
 app.post("/api/auth/reset-password", async (c) => {
+  if (getAuthProvider(c.env) !== "local") {
+    return c.json({ error: "Redefinicao de senha local desativada pelo provedor institucional." }, 409);
+  }
+
   const body = await c.req.json().catch(() => null);
   const token = String(body?.token || "");
   const password = String(body?.password || "");
@@ -252,7 +274,7 @@ app.post("/api/auth/reset-password", async (c) => {
     `SELECT pr.id, pr.user_id, u.email, u.name
      FROM password_resets pr
      JOIN users u ON u.id = pr.user_id
-     WHERE pr.token_hash = ? AND pr.used_at IS NULL AND pr.expires_at > CURRENT_TIMESTAMP
+     WHERE pr.token_hash = ? AND pr.used_at IS NULL AND datetime(pr.expires_at) > CURRENT_TIMESTAMP
      LIMIT 1`
   )
     .bind(tokenHash)
@@ -710,12 +732,18 @@ app.post("/api/admin/users", authRequired, async (c) => {
   const status = normalizeStatus(body?.status);
   const email = sanitizeText(body?.email || "").toLowerCase();
   const username = cleanSlug(body?.username || email.split("@")[0] || crypto.randomUUID());
+  const password = String(body?.password || "");
 
   if (!["ADMIN", "GESTOR", "EDITOR"].includes(role) || !email || !username) {
     return c.json({ error: "Dados de usuario invalidos." }, 400);
   }
 
+  if (getAuthProvider(c.env) === "local" && password.length < 10) {
+    return c.json({ error: "A senha inicial deve ter pelo menos 10 caracteres." }, 400);
+  }
+
   const id = crypto.randomUUID();
+  const passwordHash = getAuthProvider(c.env) === "access" ? "CLOUDFLARE_ACCESS_ONLY" : await sha256(password);
   await c.env.DB.prepare(
     `INSERT INTO users (id, name, email, password_hash, username, role, avatar, description, active, status)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -724,7 +752,7 @@ app.post("/api/admin/users", authRequired, async (c) => {
       id,
       sanitizeText(body?.name || "Novo usuario"),
       email,
-      await sha256(String(body?.password || "Admin@123")),
+      passwordHash,
       username,
       role,
       "/assets/crest.svg",
@@ -966,16 +994,10 @@ app.get("/api/admin/analytics", authRequired, async (c) => {
 });
 
 async function authRequired(c: Context<AppEnv>, next: Next) {
-  const sessionUser = await authenticateSession(c);
-  if (sessionUser) {
-    c.set("user", sessionUser);
-    await next();
-    return;
-  }
-
-  const accessUser = await authenticateCloudflareAccess(c);
-  if (accessUser) {
-    c.set("user", accessUser);
+  const provider = getAuthProvider(c.env);
+  const user = provider === "access" ? await authenticateCloudflareAccess(c) : provider === "local" ? await authenticateSession(c) : null;
+  if (user) {
+    c.set("user", user);
     await next();
     return;
   }
@@ -993,10 +1015,10 @@ async function authenticateSession(c: Context<AppEnv>) {
     `SELECT u.id, u.name, u.email, u.username, u.role, u.avatar, u.description, u.status, u.active
      FROM sessions s
      JOIN users u ON u.id = s.user_id
-     WHERE s.token = ? AND s.expires_at > CURRENT_TIMESTAMP AND u.active = 1 AND COALESCE(u.status, 'active') = 'active'
+     WHERE s.token = ? AND datetime(s.expires_at) > CURRENT_TIMESTAMP AND u.active = 1 AND COALESCE(u.status, 'active') = 'active'
      LIMIT 1`
   )
-    .bind(token)
+    .bind(await hashSessionToken(token))
     .first<SessionUser>();
 }
 
@@ -1013,11 +1035,22 @@ async function authenticateCloudflareAccess(c: Context<AppEnv>) {
     return null;
   }
 
-  const jwks = createRemoteJWKSet(new URL(`${teamDomain}/cdn-cgi/access/certs`));
-  const { payload } = await jwtVerify(accessJwt, jwks, {
-    issuer: teamDomain,
-    audience
-  });
+  let payload: JWTPayload;
+  try {
+    const jwks = createRemoteJWKSet(new URL(`${teamDomain}/cdn-cgi/access/certs`));
+    ({ payload } = await jwtVerify(accessJwt, jwks, {
+      issuer: teamDomain,
+      audience
+    }));
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        message: "Cloudflare Access assertion rejected.",
+        error: error instanceof Error ? error.name : "UnknownError"
+      })
+    );
+    return null;
+  }
 
   const email = sanitizeText((payload as AccessJwtPayload).email || "").toLowerCase();
   if (!email) {
@@ -1273,7 +1306,43 @@ function getCookie(request: Request, name: string) {
 }
 
 function getAuthProvider(env: Bindings) {
-  return sanitizeText(env.AUTH_PROVIDER || "local").toLowerCase();
+  const provider = sanitizeText(env.AUTH_PROVIDER || "").toLowerCase();
+  if (provider === "local" || provider === "access") {
+    return provider;
+  }
+
+  const environment = sanitizeText(env.ENVIRONMENT || "").toLowerCase();
+  return environment === "local" || environment === "development" || environment === "test" ? "local" : "invalid";
+}
+
+export function isAllowedCorsOrigin(origin: string, env: Pick<Bindings, "APP_BASE_URL" | "ENVIRONMENT">) {
+  const normalizedOrigin = normalizeCorsOrigin(origin);
+  if (!normalizedOrigin) {
+    return false;
+  }
+
+  const environment = sanitizeText(env.ENVIRONMENT || "").toLowerCase();
+  const isDevelopment = environment === "local" || environment === "development" || environment === "test";
+  if (isLoopbackOrigin(normalizedOrigin)) {
+    return isDevelopment;
+  }
+
+  const appOrigin = normalizeCorsOrigin(env.APP_BASE_URL || "");
+  return Boolean(appOrigin && normalizedOrigin === appOrigin);
+}
+
+function normalizeCorsOrigin(value: unknown) {
+  try {
+    const url = new URL(sanitizeText(value));
+    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : "";
+  } catch {
+    return "";
+  }
+}
+
+function isLoopbackOrigin(origin: string) {
+  const hostname = new URL(origin).hostname.toLowerCase();
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
 
 function normalizeTeamDomain(value: unknown) {
@@ -1294,7 +1363,6 @@ function getAppBaseUrl(c: Context<AppEnv>) {
 
 async function sendPasswordResetEmail(env: Bindings, to: string, name: string, resetUrl: string) {
   if (!env.EMAIL_WEBHOOK_URL) {
-    console.info(`Password reset URL for ${to}: ${resetUrl}`);
     return false;
   }
 
@@ -1353,6 +1421,10 @@ async function sha256(value: string) {
   const bytes = new TextEncoder().encode(value);
   const hash = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function hashSessionToken(token: string) {
+  return `sha256:${await sha256(token)}`;
 }
 
 function randomToken() {

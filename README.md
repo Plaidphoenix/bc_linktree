@@ -36,9 +36,7 @@ Plataforma institucional de agregador de links inspirada no fluxo do Linktree, c
 
 ## Requisitos locais
 
-Para o frontend, o build passou neste ambiente com Node 20.17.0.
-
-Para `wrangler dev`, migrations e deploy Cloudflare, use Node 22 ou superior. O Wrangler seguro instalado pelo audit (`wrangler@4.102.0`) exige Node 22+.
+Use Node 22 ou superior para build, testes, Wrangler e desenvolvimento local, conforme `package.json`.
 
 ## Instalar
 
@@ -52,14 +50,14 @@ npm install
 npm run dev:web
 ```
 
-Credenciais demo:
+Se a API nao estiver rodando, a aplicacao usa `localStorage` para manter a demo editavel somente quando
+`VITE_ENABLE_DEMO_FALLBACK=true` e uma senha local propria em `VITE_DEMO_PASSWORD` estiverem definidos em
+`.env.local`. Nenhuma senha demo reutilizavel e mantida no repositorio. Builds sem essas opcoes falham de forma
+segura e nao transformam erros da API em uma sessao demo. Em desenvolvimento, o frontend acessa
+`http://127.0.0.1:8787` diretamente para diferenciar indisponibilidade de uma resposta HTTP real.
 
-```txt
-admin@linkgov.local
-Admin@123
-```
-
-Se a API nao estiver rodando, a aplicacao usa `localStorage` para manter a demo editavel.
+A migration `0004_disable_legacy_seed_auth.sql` invalida os hashes e sessoes das identidades seedadas no D1.
+Nao restaure essas credenciais; para testar autenticacao local no Worker, provisione um usuario local proprio.
 
 
 ## Banco de dados
@@ -125,7 +123,7 @@ public/
 ## Testes
 
 ```bash
-npm run tes
+npm run test
 npm run dev
 ```
 

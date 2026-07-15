@@ -53,12 +53,14 @@ import {
   createLink,
   createProfile,
   createUser,
+  demoFallbackEnabled,
   deleteLink,
   deleteUser,
   getAdminState,
   getAnalytics,
   getPublicProfile,
   getUsers,
+  isSafeHttpUrl,
   login,
   logout,
   requestPasswordReset,
@@ -121,13 +123,13 @@ export function App() {
 }
 
 function LoginPage({ navigate }: { navigate: (to: string) => void }) {
-  const [email, setEmail] = useState(DEMO_EMAIL);
-  const [password, setPassword] = useState(DEMO_PASSWORD);
+  const [email, setEmail] = useState(demoFallbackEnabled ? DEMO_EMAIL : "");
+  const [password, setPassword] = useState(demoFallbackEnabled ? DEMO_PASSWORD : "");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
-  const [resetEmail, setResetEmail] = useState(DEMO_EMAIL);
+  const [resetEmail, setResetEmail] = useState(demoFallbackEnabled ? DEMO_EMAIL : "");
   const [resetMessage, setResetMessage] = useState("");
   const [resetLoading, setResetLoading] = useState(false);
 
@@ -227,11 +229,13 @@ function LoginPage({ navigate }: { navigate: (to: string) => void }) {
               <ArrowRight size={18} />
             </button>
           </form>
-          <div className="demo-box">
-            <span>Credenciais demo</span>
-            <code>{DEMO_EMAIL}</code>
-            <code>{DEMO_PASSWORD}</code>
-          </div>
+          {demoFallbackEnabled ? (
+            <div className="demo-box">
+              <span>Credenciais demo</span>
+              <code>{DEMO_EMAIL}</code>
+              <code>{DEMO_PASSWORD}</code>
+            </div>
+          ) : null}
         </div>
       </section>
       {forgotOpen ? (
@@ -458,16 +462,20 @@ function PublicProfilePage({ slug, navigate }: { slug: string; navigate: (to: st
 
 function PublicLinkButton({ link, profile }: { link: LinkItem; profile: PublicProfile }) {
   const Icon = getIcon(link.icon);
+  const safeTarget = isSafeHttpUrl(link.url);
 
-  const openLink = async () => {
-    await trackClick(link);
+  const openLink = () => {
+    if (!safeTarget) return;
+
     window.open(link.url, "_blank", "noopener,noreferrer");
+    void trackClick(link).catch(() => undefined);
   };
 
   return (
     <button
       className={`public-link ${link.featured ? "featured" : ""}`}
       onClick={openLink}
+      disabled={!safeTarget}
       style={
         link.featured
           ? ({ "--featured-bg": profile.primaryColor, "--featured-fg": "#ffffff" } as React.CSSProperties)
@@ -502,6 +510,12 @@ function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: st
     getAdminState()
       .then((data) => {
         if (!cancelled) setState(data);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          sessionStore.clear();
+          navigate("/login");
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -732,7 +746,9 @@ function LinksPage({
 
   const saveLink = async (link: LinkItem) => {
     try {
-      new URL(link.url);
+      if (!isSafeHttpUrl(link.url)) {
+        throw new Error("Unsupported URL protocol");
+      }
       const saved = await updateLink(link);
       updateState({ links: state.links.map((item) => (item.id === saved.id ? saved : item)) });
       setEditing(null);
@@ -1357,7 +1373,7 @@ const emptyUserForm = {
   username: "",
   role: "EDITOR" as User["role"],
   status: "active" as UserStatus,
-  password: "Admin@123",
+  password: "",
   description: "",
   profileId: "",
   linkIds: [] as string[]
@@ -1523,7 +1539,14 @@ function UsersPage({
               </label>
               <label>
                 <span>Senha inicial</span>
-                <input value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required />
+                <input
+                  type="password"
+                  value={form.password}
+                  onChange={(event) => setForm({ ...form, password: event.target.value })}
+                  minLength={10}
+                  autoComplete="new-password"
+                  required
+                />
               </label>
               <label>
                 <span>Papel</span>

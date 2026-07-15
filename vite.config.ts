@@ -12,11 +12,15 @@ export default defineConfig({
     }
   },
   build: {
-    sourcemap: true
+    sourcemap: false
   },
   test: {
     environment: "jsdom",
     globals: true,
+    env: {
+      VITE_ENABLE_DEMO_FALLBACK: "true",
+      VITE_DEMO_PASSWORD: "synthetic-test-password"
+    },
     setupFiles: ["src/test/setup.ts"],
     css: true
   }

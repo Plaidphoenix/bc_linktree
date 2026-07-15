@@ -1,21 +1,34 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import http from "node:http";
+import {
+  hashSessionToken,
+  isAllowedLocalOrigin,
+  sha256,
+  synchronizeSeedAuthentication
+} from "./local-api-security.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const dataDir = join(root, "local-data");
 const uploadDir = join(dataDir, "uploads");
 const dbPath = join(dataDir, "db.json");
-const host = readArg("--host", "0.0.0.0");
+const host = readArg("--host", "127.0.0.1");
 const port = Number(readArg("--port", "8787"));
-const passwordHash = sha256("Admin@123");
+const configuredDemoPassword = process.env.VITE_DEMO_PASSWORD || "";
+const passwordHash = configuredDemoPassword ? sha256(configuredDemoPassword) : "disabled";
 
 ensureData();
 
 const server = http.createServer(async (req, res) => {
   try {
+    if (req.headers.origin && !isAllowedLocalOrigin(req.headers.origin)) {
+      res.setHeader("Vary", "Origin");
+      sendJson(res, { error: "Origem nao autorizada para a API local." }, 403);
+      return;
+    }
+
     setCors(req, res);
     if (req.method === "OPTIONS") {
       res.writeHead(204);
@@ -42,7 +55,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/auth/logout") {
       const { db, user, token } = requireUser(req, res);
       if (!user) return;
-      db.sessions = db.sessions.filter((session) => session.token !== token);
+      db.sessions = db.sessions.filter((session) => session.tokenHash !== hashSessionToken(token));
       saveDb(db);
       sendJson(res, { ok: true });
       return;
@@ -200,6 +213,12 @@ function ensureData() {
   mkdirSync(uploadDir, { recursive: true });
   if (!existsSync(dbPath)) {
     saveDb(seedDb());
+    return;
+  }
+
+  const db = readDb();
+  if (synchronizeSeedAuthentication(db, passwordHash)) {
+    saveDb(db);
   }
 }
 
@@ -291,7 +310,7 @@ async function login(req, res) {
   }
 
   const token = randomUUID();
-  db.sessions.push({ token, userId: user.id, expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+  db.sessions.push({ tokenHash: hashSessionToken(token), userId: user.id, expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
   saveDb(db);
   sendJson(res, { token, expiresAt: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(), user: serializeUser(user) });
 }
@@ -464,6 +483,11 @@ async function createUser(req, res, db, actor) {
     sendJson(res, { error: "E-mail invalido ou ja cadastrado." }, 400);
     return;
   }
+  const password = String(body.password || "");
+  if (password.length < 10) {
+    sendJson(res, { error: "A senha inicial deve ter pelo menos 10 caracteres." }, 400);
+    return;
+  }
   const user = {
     id: randomUUID(),
     name: sanitize(body.name || "Novo usuario"),
@@ -474,7 +498,7 @@ async function createUser(req, res, db, actor) {
     active: normalizeStatus(body.status) === "active",
     avatar: "/assets/crest.svg",
     description: sanitize(body.description || ""),
-    passwordHash: sha256(String(body.password || "Admin@123"))
+    passwordHash: sha256(password)
   };
   db.users.push(user);
   applyUserPermission(db, actor, user, body.profileId, Array.isArray(body.linkIds) ? body.linkIds : []);
@@ -666,7 +690,7 @@ function applyUserPermission(db, actor, user, profileId, linkIds) {
 function requireUser(req, res) {
   const db = readDb();
   const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-  const session = db.sessions.find((item) => item.token === token && item.expiresAt > Date.now());
+  const session = db.sessions.find((item) => item.tokenHash === hashSessionToken(token) && item.expiresAt > Date.now());
   const user = session ? db.users.find((item) => item.id === session.userId && item.status === "active") : null;
   if (!user) {
     sendJson(res, { error: "Sessao ausente, invalida ou expirada." }, 401);
@@ -753,19 +777,19 @@ function sendJson(res, body, status = 200) {
 }
 
 function setCors(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
+  const origin = req.headers.origin;
+  res.setHeader("Vary", "Origin");
+  if (origin && isAllowedLocalOrigin(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  }
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Credentials", "true");
 }
 
 function readArg(name, fallback) {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : fallback;
-}
-
-function sha256(value) {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function cleanSlug(value) {

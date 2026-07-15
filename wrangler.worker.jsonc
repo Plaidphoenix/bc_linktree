@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "linkgov-institutional-api",
+  "name": "linkgov-institutional-api-local",
   "main": "worker/index.ts",
   "compatibility_date": "2026-06-18",
   "compatibility_flags": ["nodejs_compat"],

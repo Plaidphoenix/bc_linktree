@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { seedLinks, seedProfiles, seedState, seedUsers } from "./data/seed";
 
@@ -7,6 +7,11 @@ describe("App critical flows", () => {
   beforeEach(() => {
     localStorage.clear();
     window.history.pushState({}, "", "/");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("shows password reset entry point on login", () => {
@@ -25,6 +30,58 @@ describe("App critical flows", () => {
 
     expect(await screen.findByRole("heading", { name: /secretaria municipal de saude/i })).toBeInTheDocument();
     expect(screen.getByText(/portal da transparencia/i)).toBeInTheDocument();
+  });
+
+  it("does not open a persisted public link with a non-HTTP scheme", async () => {
+    localStorage.setItem(
+      "linkgov.demo-state",
+      JSON.stringify({
+        user: seedState.user,
+        users: seedUsers,
+        profiles: seedProfiles,
+        links: seedLinks.map((link, index) => (index === 0 ? { ...link, url: "data:text/plain,synthetic" } : link)),
+        selectedProfileId: "prf_saude"
+      })
+    );
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("synthetic network failure"))));
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    window.history.pushState({}, "", "/@saude");
+    render(<App />);
+
+    const link = await screen.findByRole("button", { name: /portal da transparencia/i });
+    expect(link).toBeDisabled();
+    fireEvent.click(link);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("opens a safe public link even when click tracking is unavailable", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("synthetic network failure"))));
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    window.history.pushState({}, "", "/@saude");
+    render(<App />);
+
+    const link = await screen.findByRole("button", { name: /portal da transparencia/i });
+    fireEvent.click(link);
+
+    expect(open).toHaveBeenCalledWith(expect.stringMatching(/^https?:\/\//), "_blank", "noopener,noreferrer");
+  });
+
+  it("clears a rejected admin session instead of entering demo mode", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ error: "Sessao invalida." }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" }
+        })
+      )
+    );
+    localStorage.setItem("linkgov.session", "synthetic-session");
+    window.history.pushState({}, "", "/admin/links");
+    render(<App />);
+
+    await waitFor(() => expect(window.location.pathname).toBe("/login"));
+    expect(localStorage.getItem("linkgov.session")).toBeNull();
   });
 
   it("opens the create-user dialog for admins", async () => {
