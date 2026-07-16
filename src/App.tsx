@@ -1,13 +1,16 @@
 import {
   closestCenter,
   DndContext,
-  PointerSensor,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
   useSensor,
   useSensors,
   type DragEndEvent
 } from "@dnd-kit/core";
 import {
   arrayMove,
+  sortableKeyboardCoordinates,
   SortableContext,
   useSortable,
   verticalListSortingStrategy
@@ -815,6 +818,26 @@ function AdminHeader({
           <img src={user.avatar || "/assets/crest.svg"} alt="" />
         </button>
       </div>
+      {profiles.length > 1 ? (
+        <label className="mobile-profile-switcher">
+          <Building2 size={18} aria-hidden="true" />
+          <span>Trocar pagina</span>
+          <strong>{profile.title}</strong>
+          <ChevronRight size={17} aria-hidden="true" />
+          <select
+            aria-label="Trocar pagina publica"
+            value={profile.id}
+            disabled={readOnly}
+            onChange={(event) => onProfileChange(event.target.value)}
+          >
+            {profiles.map((item) => (
+              <option value={item.id} key={item.id}>
+                {item.title}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
     </header>
   );
 }
@@ -838,7 +861,12 @@ function LinksPage({
 }) {
   const [editing, setEditing] = useState<LinkItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<LinkItem | null>(null);
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const [reordering, setReordering] = useState(false);
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
   const orderedLinks = [...state.links].sort((a, b) => a.order - b.order);
 
   const onDragEnd = async (event: DragEndEvent) => {
@@ -846,15 +874,26 @@ function LinksPage({
       pushToast("Seu perfil nao pode reordenar links.", "error");
       return;
     }
+    if (reordering) return;
     const { active, over } = event;
     if (!over || active.id === over.id) return;
     const oldIndex = orderedLinks.findIndex((link) => link.id === active.id);
     const newIndex = orderedLinks.findIndex((link) => link.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+
     const next = arrayMove(orderedLinks, oldIndex, newIndex).map((link, index) => ({ ...link, order: index + 1 }));
     updateState({ links: next });
-    const saved = await reorderLinks(next, state.profile.id);
-    updateState({ links: saved });
-    pushToast("Ordem dos links atualizada.");
+    setReordering(true);
+    try {
+      const saved = await reorderLinks(next, state.profile.id);
+      updateState({ links: saved });
+      pushToast("Ordem dos links atualizada.");
+    } catch (error) {
+      updateState({ links: orderedLinks });
+      pushToast(error instanceof Error ? error.message : "Nao foi possivel salvar a nova ordem.", "error");
+    } finally {
+      setReordering(false);
+    }
   };
 
   const addLink = async () => {
@@ -924,13 +963,13 @@ function LinksPage({
         />
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
           <SortableContext items={orderedLinks.map((link) => link.id)} strategy={verticalListSortingStrategy}>
-            <div className="link-list">
+            <div className="link-list" aria-busy={reordering}>
               {orderedLinks.map((link) => (
                 <SortableLinkCard
                   key={link.id}
                   link={link}
                   editing={editing?.id === link.id}
-                  canDrag={state.permissions.canReorderLinks}
+                  canDrag={state.permissions.canReorderLinks && !reordering}
                   canEdit={state.permissions.canManageProfile || state.permissions.editableLinkIds.includes(link.id)}
                   canManage={state.permissions.canManageProfile}
                   canDelete={state.permissions.canDeleteLinks}

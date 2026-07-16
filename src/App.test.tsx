@@ -73,6 +73,21 @@ describe("App critical flows", () => {
     expect(await screen.findByRole("heading", { level: 1, name: /secretaria municipal de educacao/i })).toBeInTheDocument();
   });
 
+  it("switches the selected public page from the mobile control", async () => {
+    localStorage.setItem("linkgov.session", "demo-test");
+    window.history.pushState({}, "", "/admin/links");
+    render(<App />);
+
+    const mobileSwitcher = await screen.findByLabelText(/trocar pagina publica/i);
+    expect(mobileSwitcher).toHaveValue("prf_saude");
+
+    fireEvent.change(mobileSwitcher, { target: { value: "prf_educacao" } });
+
+    expect(await screen.findByRole("heading", { level: 1, name: /secretaria municipal de educacao/i })).toBeInTheDocument();
+    const stored = JSON.parse(localStorage.getItem("linkgov.demo-state") || "{}");
+    expect(stored.selectedProfileId).toBe("prf_educacao");
+  });
+
   it("saves appearance changes on the selected non-default page in local fallback", async () => {
     localStorage.setItem("linkgov.session", "demo-test");
     localStorage.setItem(

@@ -752,6 +752,10 @@ select:focus {
   font-weight: 750;
 }
 
+.mobile-profile-switcher {
+  display: none;
+}
+
 .avatar-button {
   padding: 0;
   border-radius: 999px;
@@ -831,6 +835,14 @@ select:focus {
   background: transparent;
   color: var(--muted);
   cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
 }
 
 .link-card-main {
@@ -1557,6 +1569,9 @@ select:focus {
     position: sticky;
     top: 0;
     z-index: 20;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px;
     margin: -18px -18px 22px;
     padding: 14px 18px;
     background: rgba(248, 249, 255, 0.92);
@@ -1574,6 +1589,66 @@ select:focus {
 
   .profile-switcher {
     display: none;
+  }
+
+  .admin-header > div:first-child {
+    min-width: 0;
+    flex: 1 1 190px;
+  }
+
+  .admin-header-actions {
+    flex: 0 0 auto;
+    gap: 8px;
+  }
+
+  .mobile-profile-switcher {
+    position: relative;
+    order: 3;
+    width: 100%;
+    min-height: 42px;
+    display: grid;
+    grid-template-columns: 20px auto minmax(0, 1fr) 18px;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    overflow: hidden;
+    border: 1px solid var(--outline);
+    border-radius: 8px;
+    background: #fff;
+    color: var(--primary);
+    box-shadow: 0 6px 16px rgba(15, 28, 45, 0.06);
+    font-size: 0.78rem;
+    font-weight: 800;
+  }
+
+  .mobile-profile-switcher strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.74rem;
+    font-weight: 700;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-profile-switcher select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .mobile-profile-switcher:focus-within {
+    outline: 3px solid rgba(0, 93, 170, 0.2);
+    outline-offset: 2px;
+  }
+
+  .mobile-profile-switcher:has(select:disabled) {
+    opacity: 0.58;
   }
 
   .bottom-nav {
@@ -1624,7 +1699,12 @@ select:focus {
   }
 
   .link-card {
-    grid-template-columns: 30px minmax(0, 1fr);
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .drag-handle {
+    width: 44px;
+    height: 44px;
   }
 
   .link-actions {
