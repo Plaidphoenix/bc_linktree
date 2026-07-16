@@ -18,7 +18,7 @@ Browser
 
 The administrative SPA and protected API share the Worker origin so the `CF_Authorization` application cookie is first-party. This avoids the cross-origin cookie failure seen in Brave, private windows, VPN devices, and other browsers that block third-party cookies. Public profiles remain available on Pages. Public files remain private in R2 and are served by the controlled Worker endpoint `/api/assets/*`.
 
-The same-origin change was published after explicit approval and is active in Worker version `6cab8ae0-ae81-43c2-a177-ab63a0775cfa`.
+The same-origin change remains active. The current Worker version is `cf54f8fc-c691-4459-9a4e-d4e5a58e71e3`, which also includes mobile touch reordering and page switching.
 
 ## Preparation table
 
@@ -45,7 +45,7 @@ Validated with an isolated Node `v22.23.1` runtime because the system Node is st
 npm ci: passed, 237 packages, 0 vulnerabilities
 npm run build: passed
 npm run build:worker: passed in deterministic Access mode
-npm run test: passed, 36 tests in 9 files
+npm run test: passed, 37 tests in 9 files
 npm run audit: passed, 0 vulnerabilities
 Wrangler config, dry-run, and local runtime validation: 4.111.0
 Production config validator: passed
@@ -59,9 +59,9 @@ The production deploy command runs `npm run cf:validate:production` first. The v
 Production deployment records:
 
 ```text
-Worker version:          6cab8ae0-ae81-43c2-a177-ab63a0775cfa
-Worker deployed:         2026-07-16 18:44:24 UTC
-Previous Worker version: 6f3a8a57-4bce-414f-b60b-6780c4da0af7
+Worker version:          cf54f8fc-c691-4459-9a4e-d4e5a58e71e3
+Worker deployed:         2026-07-16 20:59:09 UTC
+Previous Worker version: 6cab8ae0-ae81-43c2-a177-ab63a0775cfa
 Pages deployment:  5c6e1de8-3f53-4902-830e-c761f4de8e50
 Pages completed:   2026-07-15 20:33:23 UTC
 ```
@@ -222,6 +222,10 @@ Verified initially on 2026-07-15 and repeated after the same-origin deployment o
 - The deployed bundle contains the Access session bootstrap, automatic login redirect, and offline read-only state.
 - Worker routes `/login` and `/admin/links` returned the administrative SPA with `200`; its JavaScript asset also returned `200` with the correct media type.
 - A real-browser check confirmed that the Pages login button targets the Worker and opens the official Cloudflare Access form with the email field and `Send login code` button.
+- The owner confirmed successful OTP login on another device and through VPN, Brave, and Tor.
+- Worker version `cf54f8fc-c691-4459-9a4e-d4e5a58e71e3` served the new JavaScript and CSS assets with `200` and the expected media types.
+- The production mobile bundle was exercised in an iPhone 14 Pro Max browser context with synthetic intercepted API responses, so no D1 data was changed: direct touch reordered two links, the 44-pixel handle reported `touch-action: none`, and the mobile selector changed from Saude to Educacao.
+- The production mobile interaction test completed with zero browser console errors or warnings.
 
 An authenticated administrative read, upload through the browser form, and permission-denied test still require a real OTP session. Do not send the OTP or Access cookies through chat.
 
@@ -249,7 +253,7 @@ Workers Logs are enabled in Wrangler configuration. Logs must not include JWTs, 
 
 ```bash
 npx wrangler versions list --config wrangler.worker.jsonc --env production
-npx wrangler rollback 6f3a8a57-4bce-414f-b60b-6780c4da0af7 --config wrangler.worker.jsonc --env production
+npx wrangler rollback 6cab8ae0-ae81-43c2-a177-ab63a0775cfa --config wrangler.worker.jsonc --env production
 ```
 
 Rollback changes Worker code only. It does not roll back D1 migrations or data. Export D1 before a future destructive migration. Pages deployment `5c6e1de8-3f53-4902-830e-c761f4de8e50` can be rolled back from `Workers & Pages > bc-linktree > Deployments` without changing D1 or R2.
@@ -266,20 +270,17 @@ The first deployment uses `pages.dev` and `workers.dev`. A custom domain and DNS
 
 ## Remaining manual validation
 
-The base infrastructure and same-origin authentication deployment are complete. The following checks require a human-owned OTP session:
+The base infrastructure, same-origin authentication, and mobile interaction deployment are complete. The following checks use the owner's authenticated production data:
 
-1. Open `https://bc-linktree.pages.dev/login`.
-2. Select `Entrar com codigo por e-mail`.
-3. Authenticate as `rodrigogastudillo@gmail.com` with the one-time code sent by Cloudflare.
-4. Confirm that the browser ends at `https://linkgov-institutional-api.rodrigogastudillo.workers.dev/admin/links`.
-5. Reopen `/login` on the Worker origin and confirm the automatic return to the administrative panel.
-6. Toggle the browser offline and online without logging out; confirm the offline read-only banner and automatic recovery.
-7. Confirm that the admin can switch between both public pages.
-8. Upload one valid avatar or banner and confirm that it remains visible after refreshing the page.
+1. Refresh `https://linkgov-institutional-api.rodrigogastudillo.workers.dev/admin/links` on the mobile device.
+2. Drag one real link by its handle and refresh again to confirm that D1 retained the order.
+3. Use `Trocar pagina` and confirm that the selected page and its links change together.
+4. Toggle the browser offline and online without logging out; confirm the offline read-only banner and automatic recovery.
+5. Upload one valid avatar or banner and confirm that it remains visible after refreshing the page.
 
-Do not paste the OTP, Access cookie, or JWT into chat. The automated browser check intentionally stopped at the Cloudflare email form and did not request or consume an OTP.
+Do not paste the OTP, Access cookie, or JWT into chat. Automated production UI checks use synthetic intercepted API responses and never consume a real Access session.
 
-The first successful login after this change creates new browser storage on the Worker origin; cached data from the old Pages origin is intentionally not copied across origins. Same-origin hosting removes the third-party-cookie dependency, but Tor can still fail if its exit IP changes during the Access exchange or if the exit node is challenged by Cloudflare. Test first with Brave normally or a stable VPN, then use Tor only as a best-effort privacy network.
+The first successful login after the same-origin change creates new browser storage on the Worker origin; cached data from the old Pages origin is intentionally not copied across origins. The owner confirmed the login through Brave, VPN, and Tor, although Tor remains best-effort if its exit IP changes during a future Access exchange.
 
 Staging resources and custom domains remain intentionally pending because each requires a separate resource/DNS approval. Wrangler also reported that preview URLs are currently enabled by default; disabling them should be handled as a separate reviewed configuration change. The R2 bucket must remain private.
 
