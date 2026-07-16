@@ -10,10 +10,12 @@ describe("frontend demo fallback policy", () => {
   it("disables the demo fallback for production-like builds", () => {
     expect(isDemoFallbackEnabled("production")).toBe(false);
     expect(isDemoFallbackEnabled("staging")).toBe(false);
+    expect(isDemoFallbackEnabled("worker-production")).toBe(false);
   });
 
   it("defaults production to Cloudflare Access and local development to local auth", () => {
     expect(resolveFrontendAuthProvider("production")).toBe("access");
+    expect(resolveFrontendAuthProvider("worker-production")).toBe("access");
     expect(resolveFrontendAuthProvider("development")).toBe("local");
   });
 

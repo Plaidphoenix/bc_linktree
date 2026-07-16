@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import app, { isAllowedCorsOrigin, type Bindings } from "./index";
 
 const OFFICIAL_FRONTEND = "https://bc-linktree.pages.dev";
+const OFFICIAL_ADMIN = "https://api.example.workers.dev";
 
 function env(environment: string): Bindings {
   return {
     DB: {} as D1Database,
     ENVIRONMENT: environment,
-    APP_BASE_URL: OFFICIAL_FRONTEND
+    APP_BASE_URL: OFFICIAL_FRONTEND,
+    ADMIN_BASE_URL: OFFICIAL_ADMIN
   };
 }
 
@@ -35,6 +37,18 @@ describe("worker CORS policy", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("access-control-allow-origin")).toBe(OFFICIAL_FRONTEND);
+    expect(response.headers.get("access-control-allow-credentials")).toBe("true");
+  });
+
+  it("allows the same-origin Worker admin in production", async () => {
+    const response = await app.request(
+      "https://api.example.workers.dev/api/health",
+      { headers: { Origin: OFFICIAL_ADMIN } },
+      env("production")
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("access-control-allow-origin")).toBe(OFFICIAL_ADMIN);
     expect(response.headers.get("access-control-allow-credentials")).toBe("true");
   });
 

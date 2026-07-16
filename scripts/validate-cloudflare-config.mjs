@@ -23,6 +23,7 @@ function validateEnvironment(name, environmentConfig) {
   const vars = environmentConfig.vars || {};
   const database = environmentConfig.d1_databases?.find((item) => item.binding === "DB");
   const bucket = environmentConfig.r2_buckets?.find((item) => item.binding === "ASSETS");
+  const assets = environmentConfig.assets;
   const serialized = JSON.stringify(environmentConfig);
   const placeholderMarkers = [
     "00000000-0000-0000-0000-000000000000",
@@ -53,8 +54,33 @@ function validateEnvironment(name, environmentConfig) {
   if (!isHttpsUrl(vars.APP_BASE_URL)) {
     errors.push("configure APP_BASE_URL with the HTTPS frontend origin");
   }
+  if (!isHttpsUrl(vars.ADMIN_BASE_URL)) {
+    errors.push("configure ADMIN_BASE_URL with the HTTPS Worker origin");
+  }
   if (!isHttpsUrl(vars.ASSET_BASE_URL) || !String(vars.ASSET_BASE_URL).endsWith("/api/assets")) {
     errors.push("configure ASSET_BASE_URL with the Worker HTTPS /api/assets endpoint");
+  }
+  if (
+    isHttpsUrl(vars.ADMIN_BASE_URL) &&
+    isHttpsUrl(vars.ASSET_BASE_URL) &&
+    new URL(vars.ADMIN_BASE_URL).origin !== new URL(vars.ASSET_BASE_URL).origin
+  ) {
+    errors.push("ADMIN_BASE_URL and ASSET_BASE_URL must use the same Worker origin");
+  }
+
+  if (name === "production") {
+    if (assets?.directory !== "./dist") {
+      errors.push("configure production static assets from ./dist");
+    }
+    if (assets?.not_found_handling !== "single-page-application") {
+      errors.push("configure production assets as a single-page application");
+    }
+    if (!Array.isArray(assets?.run_worker_first) || !assets.run_worker_first.includes("/api/*")) {
+      errors.push("route /api/* through the Worker before static assets");
+    }
+    if (assets?.binding) {
+      errors.push("do not reuse the R2 ASSETS binding for Worker static assets");
+    }
   }
 
   const authProvider = String(vars.AUTH_PROVIDER || "").toLowerCase();

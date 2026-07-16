@@ -11,6 +11,7 @@
     "dev:api:local": "node scripts/local-api.mjs --host 0.0.0.0 --port 8787",
     "dev:worker": "wrangler dev --config wrangler.worker.jsonc --ip 0.0.0.0 --port 8787 --persist-to ./.wrangler/state",
     "build": "tsc --noEmit && vite build",
+    "build:worker": "tsc --noEmit && vite build --mode worker-production && node scripts/prepare-worker-assets.mjs",
     "test": "vitest run",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "cf:migrate:local": "wrangler d1 migrations apply linkgov-db --config wrangler.worker.jsonc --local",
@@ -20,7 +21,7 @@
     "cf:validate:production": "node scripts/validate-cloudflare-config.mjs production",
     "deploy:api": "wrangler deploy --config wrangler.worker.jsonc",
     "deploy:api:staging": "wrangler deploy --config wrangler.worker.jsonc --env staging",
-    "deploy:api:production": "npm run cf:validate:production && wrangler deploy --config wrangler.worker.jsonc --env production",
+    "deploy:api:production": "npm run build:worker && npm run cf:validate:production && wrangler deploy --config wrangler.worker.jsonc --env production",
     "deploy:web": "vite build && wrangler pages deploy dist --project-name bc-linktree",
     "deploy:web:staging": "vite build && wrangler pages deploy dist --project-name bc-linktree --branch staging",
     "deploy:web:production": "vite build && wrangler pages deploy dist --project-name bc-linktree --branch main",
@@ -49,7 +50,7 @@
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260617.1",
+    "@cloudflare/workers-types": "^5.20260716.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.17",
@@ -60,6 +61,6 @@
     "typescript": "^6.0.3",
     "vite": "^6.4.3",
     "vitest": "^4.1.9",
-    "wrangler": "^4.86.0"
+    "wrangler": "^4.111.0"
   }
 }

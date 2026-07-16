@@ -1,6 +1,6 @@
 # BC Linktree - Cloudflare backend deployment
 
-Last verified: 2026-07-15
+Last verified: 2026-07-16
 
 This document records the real deployment state. A planned URL is never treated as a successful deployment until Cloudflare returns it and the remote health check passes.
 
@@ -8,15 +8,17 @@ This document records the real deployment state. A planned URL is never treated 
 
 ```text
 Browser
-  -> Cloudflare Pages: bc-linktree.pages.dev
-  -> Cloudflare Worker API: linkgov-institutional-api
+  -> Public site: Cloudflare Pages at bc-linktree.pages.dev
+  -> Administrative SPA and API: Worker at linkgov-institutional-api
        -> D1 binding DB
        -> R2 binding ASSETS
        -> Cloudflare Access JWT for administrative routes
        -> Cloudflare Access OTP sent to approved user email addresses
 ```
 
-Public files remain private in R2 and are served by the controlled Worker endpoint `/api/assets/*`.
+The administrative SPA and protected API share the Worker origin so the `CF_Authorization` application cookie is first-party. This avoids the cross-origin cookie failure seen in Brave, private windows, VPN devices, and other browsers that block third-party cookies. Public profiles remain available on Pages. Public files remain private in R2 and are served by the controlled Worker endpoint `/api/assets/*`.
+
+This same-origin change is prepared and locally validated but is not part of the production deployment ID recorded below until the next explicitly approved Worker deploy.
 
 ## Preparation table
 
@@ -30,6 +32,7 @@ Public files remain private in R2 and are served by the controlled Worker endpoi
 | Frontend URL | Production deployment active | `https://bc-linktree.pages.dev` | Cloudflare Pages |
 | Worker URL | Deployed and remotely verified | `https://linkgov-institutional-api.rodrigogastudillo.workers.dev` | Cloudflare deploy |
 | `APP_BASE_URL` | Live | `https://bc-linktree.pages.dev` | Pages project |
+| `ADMIN_BASE_URL` | Prepared for next deploy | `https://linkgov-institutional-api.rodrigogastudillo.workers.dev` | Worker deploy |
 | `ASSET_BASE_URL` | Live | `https://linkgov-institutional-api.rodrigogastudillo.workers.dev/api/assets` | Worker deploy |
 | `ACCESS_TEAM_DOMAIN` | Configured | `https://bc-linktree.cloudflareaccess.com` | Zero Trust |
 | `ACCESS_AUD` | Configured | Access application audience from Cloudflare | Zero Trust |
@@ -41,11 +44,13 @@ Validated with an isolated Node `v22.23.1` runtime because the system Node is st
 ```text
 npm install: passed, 0 vulnerabilities
 npm run build: passed
-npm run test: passed, 38 tests in 11 files
+npm run build:worker: passed in deterministic Access mode
+npm run test: passed, 41 tests in 11 files
 npm run audit: passed, 0 vulnerabilities
-Wrangler: 4.102.0
+Wrangler config, dry-run, and local runtime validation: 4.111.0
 Production config validator: passed
 Worker production dry-run: passed
+Worker static SPA: `/admin/links` returned `200` from the same local Worker origin
 Fresh local D1 migration rehearsal: all four migrations passed
 ```
 
@@ -128,6 +133,7 @@ The S3 API endpoint is not stored in the application and the project source is n
 ```text
 ENVIRONMENT=production
 APP_BASE_URL=https://bc-linktree.pages.dev
+ADMIN_BASE_URL=https://linkgov-institutional-api.rodrigogastudillo.workers.dev
 ASSET_BASE_URL=https://linkgov-institutional-api.rodrigogastudillo.workers.dev/api/assets
 AUTH_PROVIDER=access
 ACCESS_TEAM_DOMAIN=https://bc-linktree.cloudflareaccess.com
@@ -156,7 +162,7 @@ Do not paste secret values into chat or store them in `.env`, `package.json`, or
 
 ## Security changes prepared
 
-- Production CORS allows only `APP_BASE_URL` and rejects other browser origins with `403`.
+- Production CORS allows only `APP_BASE_URL` and `ADMIN_BASE_URL` and rejects other browser origins with `403`.
 - Loopback origins are allowed only in local, development, or test environments.
 - Preflight requests return explicit methods, headers, credentials, and cache duration.
 - Requests without `Origin` remain available for legitimate server and health checks.
@@ -169,7 +175,10 @@ Do not paste secret values into chat or store them in `.env`, `package.json`, or
 - Password reset tokens are not generated or logged when the email webhook is absent.
 - Access uses the official One-time PIN identity provider and an eight-hour session.
 - The Access policy authenticates OTP identities while D1 remains the authorization source for roles, profile access, and user status.
-- CORS preflight bypass is enabled at Access while the Worker still enforces the official Pages origin.
+- CORS preflight bypass is enabled at Access while the Worker still enforces only the approved Pages and Worker origins.
+- The Worker serves the production administrative SPA with `single-page-application` fallback and routes `/api/*` through Hono first.
+- The Access callback returns to `ADMIN_BASE_URL`, keeping the administrative SPA and protected API on one origin.
+- `build:worker` forces Access mode and same-origin API calls even when a developer has local Vite values in an ignored `.env` file.
 
 ## Deploy commands
 
@@ -177,6 +186,7 @@ Run from the repository root with Node 22 or newer:
 
 ```bash
 npm run build
+npm run build:worker
 npm run test
 npm run audit
 npm run cf:validate:production
@@ -185,6 +195,8 @@ npm run deploy:api:production
 ```
 
 The migrations and first production deployments have already been completed. Future deploys still require an authenticated Cloudflare session and must pass the same validation commands.
+
+`npm run deploy:api:production` runs `build:worker` automatically. The normal `npm run build` and Pages deployment keep their existing Pages-specific configuration and `_redirects` file.
 
 ## Remote test results
 
@@ -208,6 +220,8 @@ Verified on 2026-07-15:
 - Pages routes `/`, `/@saude`, `/@educacao`, and `/admin` returned `200` over HTTPS.
 - The deployed frontend bundle contains the real Worker URL and Access provider configuration.
 - The deployed bundle contains the Access session bootstrap, automatic login redirect, and offline read-only state.
+
+The same-origin administrative SPA described above is not included in these 2026-07-15 remote results yet. Its local Worker validation passed on 2026-07-16; repeat the remote authentication checks after the approved deployment.
 
 An authenticated administrative read, upload through the browser form, and permission-denied test still require a real OTP session. Do not send the OTP or Access cookies through chat.
 
@@ -247,22 +261,26 @@ The first deployment uses `pages.dev` and `workers.dev`. A custom domain and DNS
 1. Add the domain to the correct Cloudflare account.
 2. Configure the frontend hostname in Pages custom domains.
 3. Configure the API hostname in Worker Domains and Routes.
-4. Change `APP_BASE_URL`, `ASSET_BASE_URL`, CORS, Pages `VITE_API_BASE_URL`, and the Access application destination.
+4. Change `APP_BASE_URL`, `ADMIN_BASE_URL`, `ASSET_BASE_URL`, CORS, Pages `VITE_API_BASE_URL`, and the Access application destination.
 5. Use Cloudflare-managed HTTPS and verify SSL/TLS before switching traffic.
 
 ## Remaining manual validation
 
-The infrastructure deployment is complete. The following checks require a human-owned OTP session:
+The base infrastructure deployment is complete. The prepared same-origin authentication correction and the following checks still require an approved deploy and a human-owned OTP session:
 
-1. Open `https://bc-linktree.pages.dev/login`.
-2. Select `Entrar com codigo por e-mail`.
-3. Authenticate as `rodrigogastudillo@gmail.com` with the one-time code sent by Cloudflare.
-4. Reopen `/login` and confirm the automatic return to the administrative panel.
-5. Toggle the browser offline and online without logging out; confirm the offline read-only banner and automatic recovery.
-6. Confirm that the admin can switch between both public pages.
-7. Upload one valid avatar or banner and confirm that it remains visible after refreshing the page.
+1. Deploy the prepared Worker version after explicit approval.
+2. Open `https://bc-linktree.pages.dev/login`.
+3. Select `Entrar com codigo por e-mail`.
+4. Authenticate as `rodrigogastudillo@gmail.com` with the one-time code sent by Cloudflare.
+5. Confirm that the browser ends at `https://linkgov-institutional-api.rodrigogastudillo.workers.dev/admin/links`.
+6. Reopen `/login` on the Worker origin and confirm the automatic return to the administrative panel.
+7. Toggle the browser offline and online without logging out; confirm the offline read-only banner and automatic recovery.
+8. Confirm that the admin can switch between both public pages.
+9. Upload one valid avatar or banner and confirm that it remains visible after refreshing the page.
 
 Do not paste the OTP, Access cookie, or JWT into chat. The embedded browser connector failed to initialize during verification with `Cannot redefine property: process`; this is a connector runtime error, not an application or Cloudflare deployment failure.
+
+The first successful login after this change creates new browser storage on the Worker origin; cached data from the old Pages origin is intentionally not copied across origins. Same-origin hosting removes the third-party-cookie dependency, but Tor can still fail if its exit IP changes during the Access exchange or if the exit node is challenged by Cloudflare. Test first with Brave normally or a stable VPN, then use Tor only as a best-effort privacy network.
 
 Staging resources and custom domains remain intentionally pending because each requires a separate resource/DNS approval. The R2 bucket must remain private.
 
@@ -273,3 +291,6 @@ Staging resources and custom domains remain intentionally pending because each r
 - https://developers.cloudflare.com/workers/configuration/routing/workers-dev/
 - https://developers.cloudflare.com/pages/configuration/build-configuration/
 - https://developers.cloudflare.com/workers/configuration/versions-and-deployments/rollbacks/
+- https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/
+- https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/cors/
+- https://developers.cloudflare.com/workers/static-assets/routing/single-page-application/
