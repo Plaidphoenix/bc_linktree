@@ -2,7 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "linkgov-institutional-api-local",
   "main": "worker/index.ts",
-  "compatibility_date": "2026-06-18",
+  "compatibility_date": "2026-07-15",
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true,
@@ -32,18 +32,8 @@
       "name": "linkgov-institutional-api-staging",
       "vars": {
         "ENVIRONMENT": "staging",
-        "AUTH_PROVIDER": "access",
-        "APP_BASE_URL": "https://staging.seudominio.gov.br",
-        "ASSET_BASE_URL": "https://api-staging.seudominio.gov.br/api/assets",
-        "ACCESS_TEAM_DOMAIN": "https://sua-equipe.cloudflareaccess.com",
-        "ACCESS_AUD": "substitua-pelo-aud-do-access"
+        "AUTH_PROVIDER": "access"
       },
-      "routes": [
-        {
-          "pattern": "api-staging.seudominio.gov.br",
-          "custom_domain": true
-        }
-      ],
       "d1_databases": [
         {
           "binding": "DB",
@@ -64,29 +54,29 @@
       "vars": {
         "ENVIRONMENT": "production",
         "AUTH_PROVIDER": "access",
-        "APP_BASE_URL": "https://links.seudominio.gov.br",
-        "ASSET_BASE_URL": "https://api-links.seudominio.gov.br/api/assets",
-        "ACCESS_TEAM_DOMAIN": "https://sua-equipe.cloudflareaccess.com",
-        "ACCESS_AUD": "substitua-pelo-aud-do-access"
+        "APP_BASE_URL": "https://bc-linktree.pages.dev",
+        "ADMIN_BASE_URL": "https://linkgov-institutional-api.rodrigogastudillo.workers.dev",
+        "ASSET_BASE_URL": "https://linkgov-institutional-api.rodrigogastudillo.workers.dev/api/assets",
+        "ACCESS_TEAM_DOMAIN": "https://bc-linktree.cloudflareaccess.com",
+        "ACCESS_AUD": "5ee63db43bb47a7da20bc32d3d2902c704125cfed4b6505e1c24d9c15ce54025"
       },
-      "routes": [
-        {
-          "pattern": "api-links.seudominio.gov.br",
-          "custom_domain": true
-        }
-      ],
+      "assets": {
+        "directory": "./dist",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/api/*"]
+      },
       "d1_databases": [
         {
           "binding": "DB",
           "database_name": "linkgov-db-production",
-          "database_id": "22222222-2222-2222-2222-222222222222",
+          "database_id": "d1d690dc-5272-4086-8264-70b5ced59adc",
           "migrations_dir": "migrations"
         }
       ],
       "r2_buckets": [
         {
           "binding": "ASSETS",
-          "bucket_name": "linkgov-assets-production"
+          "bucket_name": "linktree"
         }
       ]
     }

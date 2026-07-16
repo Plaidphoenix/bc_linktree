@@ -1,5 +1,64 @@
 import { describe, expect, it, vi } from "vitest";
-import app from "./index";
+import app, { resolveAdminBaseUrl, type Bindings } from "./index";
+
+const accessEnv: Bindings = {
+  DB: {} as D1Database,
+  ENVIRONMENT: "production",
+  AUTH_PROVIDER: "access",
+  APP_BASE_URL: "https://public.example",
+  ADMIN_BASE_URL: "https://admin.example"
+};
+
+describe("Cloudflare Access authentication mode", () => {
+  it("returns authenticated users to the Worker-hosted admin", () => {
+    expect(resolveAdminBaseUrl("https://fallback.example/request", accessEnv)).toBe(
+      "https://admin.example"
+    );
+  });
+
+  it("falls back to the public app origin when no admin origin is configured", () => {
+    expect(
+      resolveAdminBaseUrl("https://fallback.example/request", {
+        APP_BASE_URL: "https://public.example"
+      })
+    ).toBe("https://public.example");
+  });
+
+  it("rejects local password login", async () => {
+    const response = await app.request(
+      "https://worker.example/api/auth/login",
+      { method: "POST", body: JSON.stringify({ email: "user@example.com", password: "secret" }) },
+      accessEnv
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/Access/i) });
+  });
+
+  it("explains that password recovery is handled without a local password", async () => {
+    const response = await app.request(
+      "https://worker.example/api/auth/forgot-password",
+      { method: "POST", body: JSON.stringify({ email: "user@example.com" }) },
+      accessEnv
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      message: expect.stringMatching(/codigo temporario/i)
+    });
+  });
+
+  it("rejects local reset tokens", async () => {
+    const response = await app.request(
+      "https://worker.example/api/auth/reset-password",
+      { method: "POST", body: JSON.stringify({ token: "x".repeat(40), password: "long-password" }) },
+      accessEnv
+    );
+
+    expect(response.status).toBe(409);
+  });
+});
 
 describe("worker authentication provider isolation", () => {
   it("does not accept a local bearer session when Cloudflare Access is configured", async () => {

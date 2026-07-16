@@ -21,6 +21,7 @@ export type Bindings = {
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
   APP_BASE_URL?: string;
+  ADMIN_BASE_URL?: string;
   ASSET_BASE_URL?: string;
   EMAIL_WEBHOOK_URL?: string;
   EMAIL_WEBHOOK_TOKEN?: string;
@@ -201,6 +202,11 @@ app.get("/api/auth/access", authRequired, async (c) => {
   return c.json({ user: serializeUser(user), provider: getAuthProvider(c.env) });
 });
 
+app.get("/api/auth/access/start", authRequired, (c) => {
+  c.header("Cache-Control", "no-store");
+  return c.redirect(`${resolveAdminBaseUrl(c.req.url, c.env)}/admin/links`, 302);
+});
+
 app.post("/api/auth/logout", authRequired, async (c) => {
   const token = getBearerToken(c.req.header("Authorization"));
   if (token) {
@@ -214,7 +220,7 @@ app.post("/api/auth/forgot-password", async (c) => {
   if (getAuthProvider(c.env) !== "local") {
     return c.json({
       ok: true,
-      message: "Este ambiente usa o provedor institucional e nao possui recuperacao de senha local."
+      message: "Este ambiente usa um codigo temporario enviado por e-mail e nao possui senha local."
     });
   }
 
@@ -231,22 +237,26 @@ app.post("/api/auth/forgot-password", async (c) => {
     .bind(email)
     .first<UserRow>();
 
-  if (user && c.env.EMAIL_WEBHOOK_URL) {
-    const token = randomToken();
-    const tokenHash = await sha256(token);
-    const expiresAt = new Date(Date.now() + 1000 * 60 * 30).toISOString();
-    const resetUrl = `${getAppBaseUrl(c)}/reset-password?token=${encodeURIComponent(token)}`;
+  if (user) {
+    const emailConfigured = Boolean(c.env.EMAIL_WEBHOOK_URL);
+    if (emailConfigured) {
+      const token = randomToken();
+      const tokenHash = await sha256(token);
+      const expiresAt = new Date(Date.now() + 1000 * 60 * 30).toISOString();
+      const resetUrl = `${getAppBaseUrl(c)}/reset-password?token=${encodeURIComponent(token)}`;
 
-    await c.env.DB.prepare(
-      `INSERT INTO password_resets (id, user_id, token_hash, expires_at, requested_ip)
-       VALUES (?, ?, ?, ?, ?)`
-    )
-      .bind(crypto.randomUUID(), user.id, tokenHash, expiresAt, c.req.header("CF-Connecting-IP") || "")
-      .run();
+      await c.env.DB.prepare(
+        `INSERT INTO password_resets (id, user_id, token_hash, expires_at, requested_ip)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+        .bind(crypto.randomUUID(), user.id, tokenHash, expiresAt, c.req.header("CF-Connecting-IP") || "")
+        .run();
 
-    await sendPasswordResetEmail(c.env, user.email, user.name, resetUrl);
+      await sendPasswordResetEmail(c.env, user.email, user.name, resetUrl);
+    }
+
     await logAudit(c.env.DB, user, "auth.password_reset.requested", "user", user.id, null, {
-      emailConfigured: Boolean(c.env.EMAIL_WEBHOOK_URL)
+      emailConfigured
     });
   }
 
@@ -258,7 +268,7 @@ app.post("/api/auth/forgot-password", async (c) => {
 
 app.post("/api/auth/reset-password", async (c) => {
   if (getAuthProvider(c.env) !== "local") {
-    return c.json({ error: "Redefinicao de senha local desativada pelo provedor institucional." }, 409);
+    return c.json({ error: "Redefinicao de senha local desativada pelo Cloudflare Access." }, 409);
   }
 
   const body = await c.req.json().catch(() => null);
@@ -743,7 +753,8 @@ app.post("/api/admin/users", authRequired, async (c) => {
   }
 
   const id = crypto.randomUUID();
-  const passwordHash = getAuthProvider(c.env) === "access" ? "CLOUDFLARE_ACCESS_ONLY" : await sha256(password);
+  const passwordHash =
+    getAuthProvider(c.env) === "access" ? "CLOUDFLARE_ACCESS_ONLY" : await sha256(password);
   await c.env.DB.prepare(
     `INSERT INTO users (id, name, email, password_hash, username, role, avatar, description, active, status)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -820,7 +831,12 @@ app.delete("/api/admin/users/:id", authRequired, async (c) => {
     return c.json({ error: "Administradores nao podem ser excluidos." }, 403);
   }
 
-  await c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(id).run();
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      "UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?"
+    ).bind(user.id, id),
+    c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(id)
+  ]);
   await logAudit(c.env.DB, user, "user.deleted", "user", id, null, { role: target.role });
   return c.json({ ok: true });
 });
@@ -995,7 +1011,12 @@ app.get("/api/admin/analytics", authRequired, async (c) => {
 
 async function authRequired(c: Context<AppEnv>, next: Next) {
   const provider = getAuthProvider(c.env);
-  const user = provider === "access" ? await authenticateCloudflareAccess(c) : provider === "local" ? await authenticateSession(c) : null;
+  const user =
+    provider === "access"
+      ? await authenticateCloudflareAccess(c)
+      : provider === "local"
+        ? await authenticateSession(c)
+        : null;
   if (user) {
     c.set("user", user);
     await next();
@@ -1315,7 +1336,10 @@ function getAuthProvider(env: Bindings) {
   return environment === "local" || environment === "development" || environment === "test" ? "local" : "invalid";
 }
 
-export function isAllowedCorsOrigin(origin: string, env: Pick<Bindings, "APP_BASE_URL" | "ENVIRONMENT">) {
+export function isAllowedCorsOrigin(
+  origin: string,
+  env: Pick<Bindings, "ADMIN_BASE_URL" | "APP_BASE_URL" | "ENVIRONMENT">
+) {
   const normalizedOrigin = normalizeCorsOrigin(origin);
   if (!normalizedOrigin) {
     return false;
@@ -1327,8 +1351,21 @@ export function isAllowedCorsOrigin(origin: string, env: Pick<Bindings, "APP_BAS
     return isDevelopment;
   }
 
-  const appOrigin = normalizeCorsOrigin(env.APP_BASE_URL || "");
-  return Boolean(appOrigin && normalizedOrigin === appOrigin);
+  const allowedOrigins = [env.APP_BASE_URL, env.ADMIN_BASE_URL]
+    .map((value) => normalizeCorsOrigin(value || ""))
+    .filter(Boolean);
+  return allowedOrigins.includes(normalizedOrigin);
+}
+
+export function resolveAdminBaseUrl(
+  requestUrl: string,
+  env: Pick<Bindings, "ADMIN_BASE_URL" | "APP_BASE_URL">
+) {
+  return (
+    normalizeCorsOrigin(env.ADMIN_BASE_URL || "") ||
+    normalizeCorsOrigin(env.APP_BASE_URL || "") ||
+    new URL(requestUrl).origin
+  );
 }
 
 function normalizeCorsOrigin(value: unknown) {

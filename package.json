@@ -11,6 +11,7 @@
     "dev:api:local": "node --env-file-if-exists=.env.local scripts/local-api.mjs --host 127.0.0.1 --port 8787",
     "dev:worker": "wrangler dev --config wrangler.worker.jsonc --ip 127.0.0.1 --port 8787 --persist-to ./.wrangler/state",
     "build": "tsc --noEmit && vite build",
+    "build:worker": "tsc --noEmit && vite build --mode worker-production && node scripts/prepare-worker-assets.mjs",
     "build:web:staging": "node scripts/build-pages.mjs staging",
     "build:web:production": "node scripts/build-pages.mjs production",
     "test": "vitest run",
@@ -19,12 +20,14 @@
     "cf:migrate:remote": "wrangler d1 migrations apply linkgov-db --config wrangler.worker.jsonc --remote",
     "cf:migrate:staging": "wrangler d1 migrations apply linkgov-db-staging --config wrangler.worker.jsonc --env staging --remote",
     "cf:migrate:production": "wrangler d1 migrations apply linkgov-db-production --config wrangler.worker.jsonc --env production --remote",
-    "deploy:api": "wrangler deploy --config wrangler.worker.jsonc --env \"\"",
-    "deploy:api:staging": "wrangler deploy --config wrangler.worker.jsonc --env staging",
-    "deploy:api:production": "wrangler deploy --config wrangler.worker.jsonc --env production",
+    "cf:validate:staging": "node scripts/validate-cloudflare-config.mjs staging",
+    "cf:validate:production": "node scripts/validate-cloudflare-config.mjs production",
+    "deploy:api": "wrangler deploy --config wrangler.worker.jsonc",
+    "deploy:api:staging": "npm run cf:validate:staging && wrangler deploy --config wrangler.worker.jsonc --env staging",
+    "deploy:api:production": "npm run build:worker && npm run cf:validate:production && wrangler deploy --config wrangler.worker.jsonc --env production",
     "deploy:web": "node scripts/build-pages.mjs",
-    "deploy:web:staging": "npm run build:web:staging && wrangler pages deploy dist --project-name linkgov-institutional --branch staging",
-    "deploy:web:production": "npm run build:web:production && wrangler pages deploy dist --project-name linkgov-institutional --branch main",
+    "deploy:web:staging": "npm run build:web:staging && wrangler pages deploy dist --project-name bc-linktree --branch staging",
+    "deploy:web:production": "npm run build:web:production && wrangler pages deploy dist --project-name bc-linktree --branch main",
     "audit": "npm audit --audit-level=low"
   },
   "engines": {
@@ -50,7 +53,7 @@
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260617.1",
+    "@cloudflare/workers-types": "^5.20260716.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.17",
@@ -61,6 +64,6 @@
     "typescript": "^6.0.3",
     "vite": "^6.4.3",
     "vitest": "^4.1.9",
-    "wrangler": "^4.86.0"
+    "wrangler": "^4.111.0"
   }
 }

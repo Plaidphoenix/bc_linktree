@@ -5,7 +5,7 @@ import viteConfig from "../vite.config.ts?raw";
 import pagesBuild from "../scripts/build-pages.mjs?raw";
 import pagesConfig from "../wrangler.jsonc?raw";
 import workerConfig from "../wrangler.worker.jsonc?raw";
-import seedAuthMigration from "../migrations/0004_disable_legacy_seed_auth.sql?raw";
+import seedAuthMigration from "../migrations/0005_disable_legacy_seed_auth.sql?raw";
 
 describe("production security configuration", () => {
   it("publishes transport and content security headers", () => {
@@ -19,6 +19,12 @@ describe("production security configuration", () => {
     expect(viteConfig).toMatch(/sourcemap:\s*false/);
   });
 
+  it("strips demo credentials and fallback flags from every build command", () => {
+    expect(viteConfig).toContain('command === "build"');
+    expect(viteConfig).toContain('VITE_ENABLE_DEMO_FALLBACK"] = JSON.stringify("false")');
+    expect(viteConfig).toContain('VITE_DEMO_PASSWORD"] = JSON.stringify("")');
+  });
+
   it("keeps local and production Worker deployment names distinct", () => {
     const config = JSON.parse(workerConfig);
     expect(config.name).not.toBe(config.env.production.name);
@@ -30,6 +36,12 @@ describe("production security configuration", () => {
     expect(pagesBuild).toContain('VITE_API_BASE_URL');
     expect(pagesBuild).toContain('VITE_AUTH_PROVIDER=access is required');
     expect(JSON.parse(pagesConfig).pages_build_output_dir).toBe("./dist");
+  });
+
+  it("blocks a staging Worker deployment until its configuration passes validation", () => {
+    expect(packageJson).toContain(
+      '"deploy:api:staging": "npm run cf:validate:staging && wrangler deploy'
+    );
   });
 
   it("disables legacy seed credentials and their sessions", () => {

@@ -45,17 +45,22 @@ import {
   Upload,
   UserRound,
   Users,
+  WifiOff,
   X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { runtimeConfig } from "./config/runtime";
 import { DEMO_EMAIL, DEMO_PASSWORD } from "./data/seed";
 import {
+  ApiError,
   createLink,
   createProfile,
   createUser,
-  demoFallbackEnabled,
   deleteLink,
   deleteUser,
+  getAccessSession,
+  getAccessLoginUrl,
+  getAccessLogoutUrl,
   getAdminState,
   getAnalytics,
   getPublicProfile,
@@ -73,6 +78,7 @@ import {
   updateUserStatus,
   uploadProfileAsset
 } from "./services/api";
+import { accessSessionStore, asReadOnlyAdminState } from "./services/access-session";
 import type { AdminPermissions, AdminState, Analytics, LinkItem, PublicProfile, Toast, User, UserStatus } from "./types";
 import { createId } from "./utils/id";
 
@@ -101,6 +107,7 @@ export function App() {
   }, []);
 
   const navigate = useCallback((to: string) => {
+    accessSessionStore.rememberAdminPath(to);
     window.history.pushState({}, "", to);
     setPath(to);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -123,15 +130,58 @@ export function App() {
 }
 
 function LoginPage({ navigate }: { navigate: (to: string) => void }) {
-  const [email, setEmail] = useState(demoFallbackEnabled ? DEMO_EMAIL : "");
-  const [password, setPassword] = useState(demoFallbackEnabled ? DEMO_PASSWORD : "");
+  const accessLogin = runtimeConfig.authProvider === "access";
+  const [checkingAccessSession, setCheckingAccessSession] = useState(
+    () => accessLogin && accessSessionStore.hasSession()
+  );
+  const [email, setEmail] = useState(runtimeConfig.demoFallbackEnabled ? DEMO_EMAIL : "");
+  const [password, setPassword] = useState(runtimeConfig.demoFallbackEnabled ? DEMO_PASSWORD : "");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
-  const [resetEmail, setResetEmail] = useState(demoFallbackEnabled ? DEMO_EMAIL : "");
+  const [resetEmail, setResetEmail] = useState(runtimeConfig.demoFallbackEnabled ? DEMO_EMAIL : "");
   const [resetMessage, setResetMessage] = useState("");
   const [resetLoading, setResetLoading] = useState(false);
+
+  useEffect(() => {
+    if (!accessLogin || !accessSessionStore.hasSession()) {
+      setCheckingAccessSession(false);
+      return;
+    }
+
+    let cancelled = false;
+    const resumeSession = async () => {
+      const cachedState = accessSessionStore.getCachedAdminState();
+      if (!navigator.onLine) {
+        if (cachedState && !cancelled) {
+          navigate(accessSessionStore.getLastAdminPath());
+        } else if (!cancelled) {
+          setCheckingAccessSession(false);
+        }
+        return;
+      }
+
+      try {
+        await getAccessSession();
+        if (!cancelled) {
+          navigate(accessSessionStore.getLastAdminPath());
+        }
+      } catch (err) {
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          accessSessionStore.clear();
+        }
+        if (!cancelled) {
+          setCheckingAccessSession(false);
+        }
+      }
+    };
+
+    void resumeSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessLogin, navigate]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -186,50 +236,72 @@ function LoginPage({ navigate }: { navigate: (to: string) => void }) {
         <div className="login-card">
           <BrandMark />
           <div>
-            <h2 id="login-title">Entrar na conta</h2>
-            <p>Portal de acesso para gestores e administradores institucionais.</p>
+            <h2 id="login-title">{accessLogin ? "Acesso institucional" : "Entrar na conta"}</h2>
+            <p>
+              {accessLogin
+                ? "Receba um codigo temporario no e-mail cadastrado para entrar com seguranca."
+                : "Portal de acesso para gestores e administradores institucionais."}
+            </p>
           </div>
-          <form onSubmit={submit} className="form-stack">
-            <label>
-              <span>E-mail institucional</span>
-              <span className="input-with-icon">
-                <Mail size={18} />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  autoComplete="email"
-                  required
-                />
-              </span>
-            </label>
-            <label>
-              <span>Senha</span>
-              <span className="input-with-icon">
-                <ShieldCheck size={18} />
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  autoComplete="current-password"
-                  required
-                />
-                <button type="button" className="icon-button ghost" onClick={() => setShowPassword((value) => !value)}>
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                  <span className="sr-only">Alternar visibilidade da senha</span>
+          {accessLogin ? (
+            <div className="form-stack">
+              {checkingAccessSession ? (
+                <button className="primary-action" type="button" disabled>
+                  <KeyRound size={18} /> Verificando acesso...
                 </button>
-              </span>
-            </label>
-            <button type="button" className="text-link align-right" onClick={() => setForgotOpen(true)}>
-              Esqueceu a senha?
-            </button>
-            {error ? <p className="form-error">{error}</p> : null}
-            <button className="primary-action" type="submit" disabled={loading}>
-              {loading ? "Entrando..." : "Entrar no sistema"}
-              <ArrowRight size={18} />
-            </button>
-          </form>
-          {demoFallbackEnabled ? (
+              ) : (
+                <a className="primary-action" href={getAccessLoginUrl()}>
+                  <KeyRound size={18} /> Entrar com codigo por e-mail
+                  <ArrowRight size={18} />
+                </a>
+              )}
+              <button type="button" className="text-link align-right" onClick={() => setForgotOpen(true)}>
+                Esqueceu a senha?
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={submit} className="form-stack">
+              <label>
+                <span>E-mail institucional</span>
+                <span className="input-with-icon">
+                  <Mail size={18} />
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    autoComplete="email"
+                    required
+                  />
+                </span>
+              </label>
+              <label>
+                <span>Senha</span>
+                <span className="input-with-icon">
+                  <ShieldCheck size={18} />
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    autoComplete="current-password"
+                    required
+                  />
+                  <button type="button" className="icon-button ghost" onClick={() => setShowPassword((value) => !value)}>
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    <span className="sr-only">Alternar visibilidade da senha</span>
+                  </button>
+                </span>
+              </label>
+              <button type="button" className="text-link align-right" onClick={() => setForgotOpen(true)}>
+                Esqueceu a senha?
+              </button>
+              {error ? <p className="form-error">{error}</p> : null}
+              <button className="primary-action" type="submit" disabled={loading}>
+                {loading ? "Entrando..." : "Entrar no sistema"}
+                <ArrowRight size={18} />
+              </button>
+            </form>
+          )}
+          {runtimeConfig.demoFallbackEnabled ? (
             <div className="demo-box">
               <span>Credenciais demo</span>
               <code>{DEMO_EMAIL}</code>
@@ -241,32 +313,43 @@ function LoginPage({ navigate }: { navigate: (to: string) => void }) {
       {forgotOpen ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <div className="modal-card">
-            <h3>Redefinir senha</h3>
-            <p>Informe o e-mail real do usuario para receber um link seguro de cadastro de nova senha.</p>
-            <form className="form-stack" onSubmit={submitPasswordReset}>
-              <label>
-                <span>E-mail institucional</span>
-                <span className="input-with-icon">
-                  <Mail size={18} />
-                  <input
-                    type="email"
-                    value={resetEmail}
-                    onChange={(event) => setResetEmail(event.target.value)}
-                    autoComplete="email"
-                    required
-                  />
-                </span>
-              </label>
-              {resetMessage ? <p className="form-success">{resetMessage}</p> : null}
-              <div className="modal-actions">
-                <button type="button" className="secondary-action" onClick={() => setForgotOpen(false)}>
-                  Cancelar
-                </button>
-                <button className="primary-action compact" type="submit" disabled={resetLoading}>
-                  <Mail size={16} /> {resetLoading ? "Enviando..." : "Enviar link"}
-                </button>
-              </div>
-            </form>
+            <h3>{accessLogin ? "Acesso sem senha" : "Redefinir senha"}</h3>
+            {accessLogin ? (
+              <>
+                <p>O acesso institucional usa um codigo temporario enviado ao e-mail cadastrado. Nao existe senha local para redefinir.</p>
+                <div className="modal-actions">
+                  <button type="button" className="primary-action compact" onClick={() => setForgotOpen(false)}>
+                    Entendi
+                  </button>
+                </div>
+              </>
+            ) : (
+              <form className="form-stack" onSubmit={submitPasswordReset}>
+                <p>Informe o e-mail real do usuario para receber um link seguro de cadastro de nova senha.</p>
+                <label>
+                  <span>E-mail institucional</span>
+                  <span className="input-with-icon">
+                    <Mail size={18} />
+                    <input
+                      type="email"
+                      value={resetEmail}
+                      onChange={(event) => setResetEmail(event.target.value)}
+                      autoComplete="email"
+                      required
+                    />
+                  </span>
+                </label>
+                {resetMessage ? <p className="form-success">{resetMessage}</p> : null}
+                <div className="modal-actions">
+                  <button type="button" className="secondary-action" onClick={() => setForgotOpen(false)}>
+                    Cancelar
+                  </button>
+                  <button className="primary-action compact" type="submit" disabled={resetLoading}>
+                    <Mail size={16} /> {resetLoading ? "Enviando..." : "Enviar link"}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       ) : null}
@@ -497,31 +580,72 @@ function PublicLinkButton({ link, profile }: { link: LinkItem; profile: PublicPr
 function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: string }) {
   const [state, setState] = useState<AdminState | null>(null);
   const [loading, setLoading] = useState(true);
+  const [offline, setOffline] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const section = getAdminSection(path);
 
   useEffect(() => {
-    if (!sessionStore.getToken()) {
+    accessSessionStore.rememberAdminPath(path);
+  }, [path]);
+
+  useEffect(() => {
+    const accessLogin = runtimeConfig.authProvider === "access";
+    if (!accessLogin && !sessionStore.getToken()) {
       navigate("/login");
       return;
     }
 
     let cancelled = false;
-    getAdminState()
-      .then((data) => {
-        if (!cancelled) setState(data);
-      })
-      .catch(() => {
+    const loadState = async (initial = false) => {
+      try {
+        const data = await getAdminState();
         if (!cancelled) {
+          setState(data);
+          setOffline(false);
+        }
+      } catch (err) {
+        if (cancelled) return;
+
+        if (accessLogin && err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          accessSessionStore.clear();
           sessionStore.clear();
           navigate("/login");
+          return;
         }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+
+        const networkFailure = err instanceof ApiError && err.status === 0;
+        const cachedState =
+          accessLogin && networkFailure && accessSessionStore.hasSession()
+            ? accessSessionStore.getCachedAdminState()
+            : null;
+        if (cachedState) {
+          setState(cachedState);
+          setOffline(true);
+        } else {
+          if (accessLogin) {
+            accessSessionStore.clear();
+          } else {
+            sessionStore.clear();
+          }
+          navigate("/login");
+        }
+      } finally {
+        if (initial && !cancelled) setLoading(false);
+      }
+    };
+
+    const handleOnline = () => void loadState();
+    const handleOffline = () => {
+      if (accessLogin) setOffline(true);
+    };
+
+    void loadState(true);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
     return () => {
       cancelled = true;
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
     };
   }, [navigate]);
 
@@ -535,13 +659,25 @@ function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: st
 
   const exit = async () => {
     await logout();
+    if (runtimeConfig.authProvider === "access") {
+      window.location.assign(getAccessLogoutUrl());
+      return;
+    }
     navigate("/login");
   };
 
   const switchProfile = async (profileId: string) => {
-    const next = await getAdminState(profileId);
-    setState(next);
-    pushToast("Pagina publica selecionada.", "info");
+    if (offline) return;
+    try {
+      const next = await getAdminState(profileId);
+      setState(next);
+      pushToast("Pagina publica selecionada.", "info");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 0) {
+        setOffline(true);
+      }
+      pushToast(err instanceof Error ? err.message : "Nao foi possivel trocar a pagina.", "error");
+    }
   };
 
   if (loading || !state) {
@@ -549,6 +685,8 @@ function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: st
   }
 
   const updateState = (next: Partial<AdminState>) => setState((current) => (current ? { ...current, ...next } : current));
+  const visibleState = offline ? asReadOnlyAdminState(state) : state;
+  const networkOnlySection = offline && (section === "analytics" || section === "pages" || section === "users");
 
   return (
     <div className="admin-layout">
@@ -562,25 +700,33 @@ function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: st
           navigate={navigate}
           onLogout={exit}
           onProfileChange={switchProfile}
+          readOnly={offline}
         />
-        {section === "links" ? (
-          <LinksPage state={state} updateState={updateState} pushToast={pushToast} />
+        {offline ? (
+          <div className="connection-banner" role="status">
+            <WifiOff size={20} />
+            <span>Sem conexao. Exibindo a ultima versao salva em modo somente leitura.</span>
+          </div>
         ) : null}
-        {section === "appearance" ? (
-          <AppearancePage state={state} updateState={updateState} pushToast={pushToast} />
+        {networkOnlySection ? <OfflineAdminSection /> : null}
+        {!networkOnlySection && section === "links" ? (
+          <LinksPage state={visibleState} updateState={updateState} pushToast={pushToast} />
         ) : null}
-        {section === "analytics" ? <AnalyticsPage profileId={state.profile.id} /> : null}
-        {section === "pages" ? <PagesPage state={state} updateState={updateState} pushToast={pushToast} navigate={navigate} /> : null}
-        {section === "users" ? (
+        {!networkOnlySection && section === "appearance" ? (
+          <AppearancePage state={visibleState} updateState={updateState} pushToast={pushToast} />
+        ) : null}
+        {!networkOnlySection && section === "analytics" ? <AnalyticsPage profileId={state.profile.id} /> : null}
+        {!networkOnlySection && section === "pages" ? <PagesPage state={visibleState} updateState={updateState} pushToast={pushToast} navigate={navigate} /> : null}
+        {!networkOnlySection && section === "users" ? (
           <UsersPage
-            currentUser={state.user}
-            permissions={state.permissions}
-            profiles={state.profiles}
-            activeProfile={state.profile}
-            links={state.links}
+            currentUser={visibleState.user}
+            permissions={visibleState.permissions}
+            profiles={visibleState.profiles}
+            activeProfile={visibleState.profile}
+            links={visibleState.links}
           />
         ) : null}
-        {section === "settings" ? <SettingsPage user={state.user} /> : null}
+        {section === "settings" ? <SettingsPage user={visibleState.user} /> : null}
       </main>
       <BottomNav section={section} navigate={navigate} permissions={state.permissions} />
       <ToastStack toasts={toasts} />
@@ -640,7 +786,8 @@ function AdminHeader({
   permissions,
   navigate,
   onLogout,
-  onProfileChange
+  onProfileChange,
+  readOnly
 }: {
   user: User;
   profile: PublicProfile;
@@ -649,6 +796,7 @@ function AdminHeader({
   navigate: (to: string) => void;
   onLogout: () => void;
   onProfileChange: (profileId: string) => void;
+  readOnly: boolean;
 }) {
   return (
     <header className="admin-header">
@@ -661,7 +809,7 @@ function AdminHeader({
         {profiles.length > 1 ? (
           <label className="profile-switcher">
             <span className="sr-only">Selecionar pagina publica</span>
-            <select value={profile.id} onChange={(event) => onProfileChange(event.target.value)}>
+            <select value={profile.id} disabled={readOnly} onChange={(event) => onProfileChange(event.target.value)}>
               {profiles.map((item) => (
                 <option value={item.id} key={item.id}>
                   {item.title}
@@ -683,6 +831,14 @@ function AdminHeader({
         </button>
       </div>
     </header>
+  );
+}
+
+function OfflineAdminSection() {
+  return (
+    <section className="single-column-page">
+      <PageTitle title="Conteudo indisponivel offline" description="Esta area sera atualizada automaticamente quando a conexao voltar." />
+    </section>
   );
 }
 
@@ -1512,7 +1668,11 @@ function UsersPage({
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <div className="modal-card wide-modal">
             <h3>Novo usuario</h3>
-            <p>Crie administradores, gestores ou editores locais para teste.</p>
+            <p>
+              {runtimeConfig.authProvider === "access"
+                ? "Cadastre o e-mail que recebera o codigo temporario do acesso institucional."
+                : "Crie administradores, gestores ou editores locais para teste."}
+            </p>
             <form className="form-grid user-form" onSubmit={submitUser}>
               <label>
                 <span>Nome</span>
@@ -1537,17 +1697,19 @@ function UsersPage({
                 <span>Usuario</span>
                 <input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required />
               </label>
-              <label>
-                <span>Senha inicial</span>
-                <input
-                  type="password"
-                  value={form.password}
-                  onChange={(event) => setForm({ ...form, password: event.target.value })}
-                  minLength={10}
-                  autoComplete="new-password"
-                  required
-                />
-              </label>
+              {runtimeConfig.authProvider === "local" ? (
+                <label>
+                  <span>Senha inicial</span>
+                  <input
+                    type="password"
+                    value={form.password}
+                    onChange={(event) => setForm({ ...form, password: event.target.value })}
+                    minLength={10}
+                    autoComplete="new-password"
+                    required
+                  />
+                </label>
+              ) : null}
               <label>
                 <span>Papel</span>
                 <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as User["role"] })}>

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEMO_EMAIL, DEMO_PASSWORD } from "../data/seed";
+import { DEMO_EMAIL, DEMO_PASSWORD, seedState } from "../data/seed";
 
 describe("API demo fallback boundary", () => {
   beforeEach(() => {
@@ -31,7 +31,8 @@ describe("API demo fallback boundary", () => {
     expect(sessionStore.getToken()).toBeNull();
   });
 
-  it("keeps the explicit local demo fallback available for development", async () => {
+  it("keeps the explicit local demo fallback available for network failures", async () => {
+    vi.stubEnv("VITE_AUTH_PROVIDER", "local");
     vi.stubEnv("VITE_ENABLE_DEMO_FALLBACK", "true");
     vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("synthetic network failure"))));
 
@@ -43,6 +44,7 @@ describe("API demo fallback boundary", () => {
   });
 
   it("does not enable demo fallback without an operator-supplied local password", async () => {
+    vi.stubEnv("VITE_AUTH_PROVIDER", "local");
     vi.stubEnv("VITE_ENABLE_DEMO_FALLBACK", "true");
     vi.stubEnv("VITE_DEMO_PASSWORD", "");
     vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("synthetic network failure"))));
@@ -53,7 +55,8 @@ describe("API demo fallback boundary", () => {
     expect(sessionStore.getToken()).toBeNull();
   });
 
-  it.each([401, 403, 409])("does not use demo fallback for an HTTP %s response even in demo mode", async (status) => {
+  it.each([401, 403, 409, 500])("does not use demo fallback for an HTTP %s response even in demo mode", async (status) => {
+    vi.stubEnv("VITE_AUTH_PROVIDER", "local");
     vi.stubEnv("VITE_ENABLE_DEMO_FALLBACK", "true");
     vi.stubGlobal(
       "fetch",
@@ -79,5 +82,84 @@ describe("API demo fallback boundary", () => {
     expect(isSafeHttpUrl("javascript:synthetic-payload")).toBe(false);
     expect(isSafeHttpUrl("data:text/plain,synthetic")).toBe(false);
     expect(isSafeHttpUrl("not a URL")).toBe(false);
+  });
+});
+
+describe("Cloudflare Access frontend URLs", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("builds remote login and logout URLs without duplicate slashes", async () => {
+    const { buildAccessUrl } = await import("./api");
+
+    expect(buildAccessUrl("https://api.example.workers.dev/", "/api/auth/access/start")).toBe(
+      "https://api.example.workers.dev/api/auth/access/start"
+    );
+    expect(buildAccessUrl("https://api.example.workers.dev", "/cdn-cgi/access/logout")).toBe(
+      "https://api.example.workers.dev/cdn-cgi/access/logout"
+    );
+  });
+
+  it("keeps same-origin paths relative for Worker-hosted assets", async () => {
+    const { buildAccessUrl } = await import("./api");
+
+    expect(buildAccessUrl(null, "/api/auth/access/start")).toBe("/api/auth/access/start");
+  });
+});
+
+describe("authentication transport", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("uses the Access cookie without forwarding a stale local bearer", async () => {
+    vi.stubEnv("VITE_AUTH_PROVIDER", "access");
+    const fetchMock = vi.fn(async (_input: unknown, _init?: RequestInit) =>
+      new Response(JSON.stringify({ user: seedState.user, provider: "access" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getAccessSession, sessionStore } = await import("./api");
+    sessionStore.setToken("stale-local-bearer");
+    await getAccessSession();
+
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(init).toBeDefined();
+    expect(new Headers(init?.headers).has("Authorization")).toBe(false);
+    expect(init?.credentials).toBe("include");
+  });
+
+  it("forwards the raw opaque bearer unchanged for local authentication", async () => {
+    vi.stubEnv("VITE_AUTH_PROVIDER", "local");
+    const fetchMock = vi.fn(async (_input: unknown, _init?: RequestInit) =>
+      new Response(JSON.stringify(seedState), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getAdminState, sessionStore } = await import("./api");
+    sessionStore.setToken("raw-opaque-bearer");
+    await getAdminState();
+
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(init).toBeDefined();
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer raw-opaque-bearer");
   });
 });
