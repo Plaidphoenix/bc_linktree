@@ -1,53 +1,71 @@
 import { randomUUID } from "node:crypto";
-import { createInterface } from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
+import {
+  authenticateSimCredentials,
+  logoutSimToken,
+  SimAuthError,
+  type SimAuthBindings
+} from "../worker/sim-auth";
+import { assertInteractiveTerminal, readHidden, readVisible } from "./terminal-prompts";
 
 const databaseUrl = requiredEnvironment("DATABASE_URL");
-if (!input.isTTY || !output.isTTY) {
-  throw new Error("Bootstrap must be run in an interactive terminal.");
-}
+assertInteractiveTerminal();
 
-const prompt = createInterface({ input, output });
 const pool = new Pool({
   connectionString: databaseUrl,
   max: 1,
   application_name: "linkgov-bootstrap"
 });
 
-try {
-  const adminCount = await pool.query<{ total: string }>(
-    "SELECT COUNT(*) AS total FROM users WHERE role = 'ADMIN'"
-  );
-  if (Number(adminCount.rows[0]?.total || 0) > 0) {
-    throw new Error("An administrator already exists. Use the LinkGov user management screen.");
+void bootstrap()
+  .catch((error: unknown) => {
+    reportSafeFailure(error);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await pool.end();
+  });
+
+async function bootstrap() {
+  if ((await countAdministrators(pool)) > 0) {
+    throw new CliError(
+      "Um administrador ja existe. Use a tela de gestao de usuarios do LinkGov."
+    );
   }
 
-  const name = requiredAnswer(await prompt.question("Nome do administrador: "));
-  const email = validEmail(await prompt.question("E-mail institucional: "));
-  const externalSubject = validExternalSubject(
-    await prompt.question("Identificador interno retornado pelo SIM: ")
-  );
+  const externalSubject = await verifySimIdentity(simEnvironment());
+  const name = requiredAnswer(await readVisible("Nome do administrador: "));
+  const email = validEmail(await readVisible("E-mail institucional: "));
   const pageTitle = requiredAnswer(
-    (await prompt.question("Titulo da primeira pagina [Portal Institucional]: ")) || "Portal Institucional"
+    (await readVisible("Titulo da primeira pagina [Portal Institucional]: ")) ||
+      "Portal Institucional"
   );
   const suggestedSlug = cleanSlug(pageTitle) || "portal-institucional";
-  const pageSlug = cleanSlug(
-    (await prompt.question(`Slug da primeira pagina [${suggestedSlug}]: `)) || suggestedSlug
+  const pageSlug = validSlug(
+    (await readVisible(`Slug da primeira pagina [${suggestedSlug}]: `)) || suggestedSlug
   );
 
   const userId = randomUUID();
   const profileId = randomUUID();
+  const username = cleanSlug(email.split("@")[0]) || `admin-${userId.slice(0, 8)}`;
   const client = await pool.connect();
+
   try {
     await client.query("BEGIN");
+    await client.query("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE");
+    if ((await countAdministrators(client)) > 0) {
+      throw new CliError(
+        "Outro administrador foi criado durante esta operacao. Nenhum dado foi alterado."
+      );
+    }
+
     await client.query(
       `INSERT INTO users (
          id, name, email, password_hash, username, role, avatar, description,
          active, status, external_subject
        ) VALUES ($1, $2, $3, 'SIM_IDENTITY_ONLY', $4, 'ADMIN', '/assets/crest.svg',
          'Administrador inicial autenticado pelo SIM', 1, 'active', $5)`,
-      [userId, name, email, cleanSlug(email.split("@")[0]), externalSubject]
+      [userId, name, email, username, externalSubject]
     );
     await client.query(
       `INSERT INTO profiles (
@@ -67,27 +85,90 @@ try {
   }
 
   console.log("Administrador e pagina inicial criados com sucesso.");
-} finally {
-  prompt.close();
-  await pool.end();
+}
+
+async function verifySimIdentity(env: SimAuthBindings) {
+  const identifier = requiredAnswer(await readVisible("Usuario institucional: "));
+  let password = await readHidden("Senha institucional: ");
+  let providerToken = "";
+
+  try {
+    const authenticated = await authenticateSimCredentials(env, identifier, password);
+    providerToken = authenticated.token;
+    password = "";
+    return validExternalSubject(authenticated.identity.subject);
+  } finally {
+    password = "";
+    if (providerToken) {
+      await logoutSimToken(env, providerToken);
+      providerToken = "";
+    }
+  }
+}
+
+function simEnvironment(): SimAuthBindings {
+  return {
+    ENVIRONMENT: process.env.ENVIRONMENT || "production",
+    SIM_API_BASE_URL: requiredEnvironment("SIM_API_BASE_URL"),
+    SIM_LOGIN_PATH: process.env.SIM_LOGIN_PATH,
+    SIM_VALIDATE_PATH: process.env.SIM_VALIDATE_PATH,
+    SIM_LOGOUT_PATH: process.env.SIM_LOGOUT_PATH,
+    SIM_LOGIN_CONTENT_TYPE: process.env.SIM_LOGIN_CONTENT_TYPE,
+    SIM_CLIENT_TYPE: process.env.SIM_CLIENT_TYPE,
+    SIM_SUBJECT_CLAIM: process.env.SIM_SUBJECT_CLAIM,
+    SIM_REQUEST_TIMEOUT_MS: process.env.SIM_REQUEST_TIMEOUT_MS
+  };
+}
+
+async function countAdministrators(queryable: Pick<Pool, "query"> | Pick<PoolClient, "query">) {
+  const result = await queryable.query<{ total: string }>(
+    "SELECT COUNT(*) AS total FROM users WHERE role = 'ADMIN'"
+  );
+  return Number(result.rows[0]?.total || 0);
+}
+
+function reportSafeFailure(error: unknown) {
+  if (error instanceof CliError) {
+    console.error(error.message);
+    return;
+  }
+  if (error instanceof SimAuthError) {
+    console.error(
+      `Bootstrap nao concluido pela autenticacao institucional (codigo=${error.code} status=${error.status}).`
+    );
+    return;
+  }
+
+  const incidentId = randomUUID();
+  const databaseCode =
+    isRecord(error) && typeof error.code === "string" && /^[A-Z0-9]{5}$/.test(error.code)
+      ? ` db_code=${error.code}`
+      : "";
+  console.error(
+    `Bootstrap nao concluido (incident=${incidentId}${databaseCode}). Consulte os logs restritos do servidor.`
+  );
 }
 
 function requiredEnvironment(name: string) {
   const value = process.env[name]?.trim();
-  if (!value) throw new Error(`Missing required environment variable: ${name}`);
+  if (!value) {
+    throw new CliError(`Variavel obrigatoria ausente: ${name}.`);
+  }
   return value;
 }
 
 function requiredAnswer(value: string) {
   const answer = value.trim();
-  if (!answer) throw new Error("O valor informado nao pode ficar vazio.");
+  if (!answer) {
+    throw new CliError("O valor informado nao pode ficar vazio.");
+  }
   return answer.slice(0, 160);
 }
 
 function validEmail(value: string) {
   const email = value.trim().toLowerCase();
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-    throw new Error("E-mail invalido.");
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 254) {
+    throw new CliError("E-mail invalido.");
   }
   return email;
 }
@@ -95,9 +176,17 @@ function validEmail(value: string) {
 function validExternalSubject(value: string) {
   const subject = value.trim();
   if (!/^[A-Za-z0-9._:@-]{1,160}$/.test(subject)) {
-    throw new Error("Identificador SIM invalido.");
+    throw new CliError("Identificador SIM invalido.");
   }
   return subject;
+}
+
+function validSlug(value: string) {
+  const slug = cleanSlug(value);
+  if (!slug) {
+    throw new CliError("Slug invalido.");
+  }
+  return slug;
 }
 
 function cleanSlug(value: string) {
@@ -111,3 +200,9 @@ function cleanSlug(value: string) {
     .replace(/^-|-$/g, "")
     .slice(0, 80);
 }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+class CliError extends Error {}

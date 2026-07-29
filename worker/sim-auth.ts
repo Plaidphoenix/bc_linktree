@@ -7,6 +7,7 @@ export type SimAuthBindings = {
   SIM_VALIDATE_PATH?: string;
   SIM_LOGOUT_PATH?: string;
   SIM_LOGIN_CONTENT_TYPE?: string;
+  SIM_CLIENT_TYPE?: string;
   SIM_SUBJECT_CLAIM?: string;
   SIM_TOKEN_ENCRYPTION_KEY?: string;
   SIM_REQUEST_TIMEOUT_MS?: string;
@@ -36,7 +37,7 @@ export async function authenticateSimCredentials(
 ) {
   const endpoint = simEndpoint(env, env.SIM_LOGIN_PATH, "api/login");
   const contentType = String(env.SIM_LOGIN_CONTENT_TYPE || "json").trim().toLowerCase();
-  const payload = { user: identifier, pass: password, client: "web" };
+  const payload = { user: identifier, pass: password, client: simClientType(env) };
   const body =
     contentType === "form"
       ? new URLSearchParams(payload)
@@ -65,11 +66,16 @@ export async function authenticateSimCredentials(
     throw new SimAuthError("Usuario ou senha invalidos.", 401, "invalid_credentials");
   }
 
-  await validateSimToken(env, token, fetchImpl);
-  return {
-    token,
-    identity: extractSimIdentity(env, token)
-  };
+  try {
+    await validateSimToken(env, token, fetchImpl);
+    return {
+      token,
+      identity: extractSimIdentity(env, token)
+    };
+  } catch (error) {
+    await logoutSimToken(env, token, fetchImpl).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function validateSimToken(
@@ -89,9 +95,13 @@ export async function validateSimToken(
     },
     fetchImpl
   );
-  const result = await readJsonObject(response);
+  const result = await readJsonValue(response);
+  const valid =
+    result === true ||
+    (isRecord(result) &&
+      (result.sucesso === true || result.success === true || result.valido === true));
 
-  if (!response.ok || result.sucesso === false || result.success === false || result.valido === false) {
+  if (!response.ok || !valid) {
     throw new SimAuthError("Sessao institucional invalida ou expirada.", 401, "invalid_token");
   }
 }
@@ -240,15 +250,17 @@ async function simFetch(
 }
 
 async function readJsonObject(response: Response): Promise<Record<string, unknown>> {
+  const value = await readJsonValue(response);
+  return isRecord(value) ? value : {};
+}
+
+async function readJsonValue(response: Response): Promise<unknown> {
   const contentType = response.headers.get("Content-Type") || "";
   if (!contentType.toLowerCase().includes("application/json")) {
-    return {};
+    return null;
   }
 
-  const value = await response.json().catch(() => null);
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
+  return response.json().catch(() => null);
 }
 
 async function importEncryptionKey(env: SimAuthBindings) {
@@ -308,6 +320,18 @@ function stringValue(value: unknown) {
 function safeClaimName(value: unknown) {
   const name = String(value || "").trim();
   return /^[A-Za-z0-9_.:-]{1,80}$/.test(name) ? name : "";
+}
+
+function simClientType(env: SimAuthBindings) {
+  const value = String(env.SIM_CLIENT_TYPE || "mobile").trim();
+  if (!/^[A-Za-z0-9._-]{1,30}$/.test(value)) {
+    throw new SimAuthError("Tipo de cliente SIM invalido.", 503, "misconfigured");
+  }
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isLoopback(hostname: string) {

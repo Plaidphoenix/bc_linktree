@@ -123,8 +123,8 @@ app.onError((error, c) => {
   if (error instanceof SimAuthError) {
     return c.json({ error: error.message, code: error.code }, error.status);
   }
-  console.error(error);
-  return c.json({ error: "Erro interno da API." }, 500);
+  const incidentId = reportOperationalFailure("error", "api.unhandled", error);
+  return c.json({ error: "Erro interno da API.", incidentId }, 500);
 });
 
 app.get("/api/health", (c) =>
@@ -363,7 +363,7 @@ app.post("/api/auth/reset-password", async (c) => {
   ]);
 
   await logAudit(c.env.DB, null, "auth.password_reset.completed", "user", reset.user_id, null, {
-    email: reset.email
+    provider: "local"
   });
 
   return c.json({ ok: true });
@@ -1116,46 +1116,59 @@ async function loginWithSim(c: Context<AppEnv>, identifier: string, password: st
   }
 
   const authenticated = await authenticateSimCredentials(c.env, identifier, password);
-  const user = await c.env.DB.prepare(
-    `SELECT id, name, email, username, role, avatar, description, status, active, external_subject
-     FROM users
-     WHERE external_subject = ? AND active = 1 AND COALESCE(status, 'active') = 'active'
-     LIMIT 1`
-  )
-    .bind(authenticated.identity.subject)
-    .first<SessionUser>();
+  let sessionPersisted = false;
 
-  if (!user) {
-    return c.json(
-      {
-        error:
-          "A identidade foi validada pelo SIM, mas ainda nao possui permissao no LinkGov. Solicite o cadastro a um administrador."
-      },
-      403
-    );
-  }
-
-  const sessionToken = randomToken();
-  const expiresAt = new Date(Date.now() + simSessionTtlSeconds(c.env) * 1000).toISOString();
-  await c.env.DB.prepare(
-    `INSERT INTO sessions (token, user_id, expires_at, provider, provider_token)
-     VALUES (?, ?, ?, 'sim', ?)`
-  )
-    .bind(
-      await sha256(sessionToken),
-      user.id,
-      expiresAt,
-      await encryptSimToken(c.env, authenticated.token)
+  try {
+    const user = await c.env.DB.prepare(
+      `SELECT id, name, email, username, role, avatar, description, status, active, external_subject
+       FROM users
+       WHERE external_subject = ? AND active = 1 AND COALESCE(status, 'active') = 'active'
+       LIMIT 1`
     )
-    .run();
+      .bind(authenticated.identity.subject)
+      .first<SessionUser>();
 
-  setSessionCookie(c, sessionToken, expiresAt);
-  await logAudit(c.env.DB, user, "auth.login", "session", "sim-session", null, { provider: "sim" });
+    if (!user) {
+      return c.json(
+        {
+          error:
+            "A identidade foi validada pelo SIM, mas ainda nao possui permissao no LinkGov. Solicite o cadastro a um administrador."
+        },
+        403
+      );
+    }
 
-  return c.json({
-    expiresAt,
-    user: serializeUser(user)
-  });
+    const sessionToken = randomToken();
+    const expiresAt = new Date(Date.now() + simSessionTtlSeconds(c.env) * 1000).toISOString();
+    await c.env.DB.prepare(
+      `INSERT INTO sessions (token, user_id, expires_at, provider, provider_token)
+       VALUES (?, ?, ?, 'sim', ?)`
+    )
+      .bind(
+        await sha256(sessionToken),
+        user.id,
+        expiresAt,
+        await encryptSimToken(c.env, authenticated.token)
+      )
+      .run();
+    sessionPersisted = true;
+
+    setSessionCookie(c, sessionToken, expiresAt);
+    await logAudit(c.env.DB, user, "auth.login", "session", "sim-session", null, {
+      provider: "sim"
+    });
+
+    return c.json({
+      expiresAt,
+      user: serializeUser(user)
+    });
+  } finally {
+    if (!sessionPersisted) {
+      await logoutSimToken(c.env, authenticated.token).catch((error: unknown) => {
+        reportOperationalFailure("warn", "sim.cleanup_logout_failed", error);
+      });
+    }
+  }
 }
 
 async function authRequired(c: Context<AppEnv>, next: Next) {
@@ -1652,8 +1665,34 @@ async function logAudit(
       )
       .run();
   } catch (error) {
-    console.warn("Audit log skipped.", error);
+    reportOperationalFailure("warn", "audit.write_failed", error);
   }
+}
+
+function reportOperationalFailure(
+  level: "error" | "warn",
+  event: string,
+  error: unknown
+) {
+  const incidentId = crypto.randomUUID();
+  const entry = JSON.stringify({
+    level,
+    event,
+    incidentId,
+    errorType: safeErrorType(error)
+  });
+  if (level === "error") {
+    console.error(entry);
+  } else {
+    console.warn(entry);
+  }
+  return incidentId;
+}
+
+function safeErrorType(error: unknown) {
+  const type =
+    error instanceof Error ? error.name : error === null ? "null" : typeof error;
+  return /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(type) ? type : "UnknownError";
 }
 
 async function sha256(value: string) {

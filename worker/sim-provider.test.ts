@@ -136,6 +136,11 @@ describe("SIM Worker provider", () => {
             headers: { "Content-Type": "application/json" }
           })
         )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ sucesso: true }), {
+            headers: { "Content-Type": "application/json" }
+          })
+        )
     );
 
     const response = await app.request(
@@ -150,6 +155,7 @@ describe("SIM Worker provider", () => {
 
     expect(response.status).toBe(403);
     expect(sessionValues).toHaveLength(0);
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   it("clears the local session even when provider logout is unavailable", async () => {

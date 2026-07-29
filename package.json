@@ -17,6 +17,7 @@
     "start:selfhosted": "node dist-server/index.mjs",
     "selfhosted:migrate": "tsx server/migrate.ts",
     "selfhosted:bootstrap-admin": "tsx server/bootstrap-admin.ts",
+    "selfhosted:sim-check": "tsx server/sim-check.ts",
     "test": "vitest run",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "cf:migrate:local": "wrangler d1 migrations apply linkgov-db --config wrangler.worker.jsonc --local",

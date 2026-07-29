@@ -5,7 +5,8 @@ await build({
   entryPoints: {
     index: "server/index.ts",
     migrate: "server/migrate.ts",
-    "bootstrap-admin": "server/bootstrap-admin.ts"
+    "bootstrap-admin": "server/bootstrap-admin.ts",
+    "sim-check": "server/sim-check.ts"
   },
   bundle: true,
   platform: "node",

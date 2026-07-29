@@ -13,10 +13,11 @@ O projeto esta preparado para executar fora da Cloudflare com:
 - Sessao propria do LinkGov em cookie `HttpOnly`, `Secure` e `SameSite=Lax`.
 - JWT do SIM cifrado no banco e nunca devolvido ao navegador.
 - Cache administrativo offline somente leitura com validade maxima de oito horas.
+- Logs operacionais estruturados sem mensagem bruta do banco ou dados pessoais.
 
-Nenhum dado real foi lido, importado ou modificado durante esta preparacao. O deploy
-nao foi executado porque faltam acesso ao servidor municipal, banco PostgreSQL,
-hostname definitivo e confirmacao do contrato privado do SIM.
+Nenhuma credencial real foi usada por automacao, enviada em comandos, persistida
+ou adicionada ao Git durante esta preparacao. O deploy nao foi executado porque
+faltam acesso ao servidor municipal, banco PostgreSQL e hostname definitivo.
 
 ## Sobre o JWT
 
@@ -32,16 +33,22 @@ O cabecalho e o payload de um JWT assinado normalmente sao apenas codificados em
 base64url, nao cifrados. Por isso, dados pessoais nao devem ser colocados no token
 quando nao forem estritamente necessarios.
 
+Somente o SIM pode gerar um JWT valido, por meio do `POST /api/login`. O LinkGov
+nao possui e nao deve receber a chave de assinatura do SIM. O comando
+`selfhosted:sim-check` obtem um token em memoria, valida, executa logout e o
+descarta sem imprimir ou salvar o valor.
+
 Como um JWT e uma senha reais apareceram em capturas e na conversa:
 
 1. Encerre todas as sessoes do SIM para o usuario afetado.
 2. Troque a senha institucional.
 3. Nao reutilize o JWT publicado.
 4. Nao envie o novo JWT, senha ou chave de assinatura para o Codex.
-5. Remova as quatro capturas locais da pasta temporaria.
+5. Remova as dez capturas locais da pasta temporaria.
 
 Os logins locais do GitHub CLI e do Wrangler ja foram removidos. A varredura do
-repositorio e dos 21 commits nao encontrou PAT, JWT, Bearer token ou chave privada.
+repositorio e do historico Git existente nao encontrou PAT, JWT, Bearer token ou
+chave privada.
 
 ## Arquitetura recomendada
 
@@ -66,9 +73,11 @@ navegador.
 
 As capturas fornecidas confirmam:
 
-- `POST /default/api/login`
-- `POST /default/api/validar-acesso`
-- `POST /default/api/logout`
+- `POST /default/api/login` recebe JSON com `user`, `pass` e `client: mobile`.
+- O login bem-sucedido retorna `sucesso: true` e um JWT.
+- `POST /default/api/validar-acesso` recebe o JWT como Bearer e retorna o
+  booleano JSON `true` quando a sessao e valida.
+- `POST /default/api/logout` recebe o JWT como Bearer.
 - Operacoes genericas de CSV
 
 A pagina de documentacao completa exige uma sessao real. Ela nao foi aberta com
@@ -78,17 +87,15 @@ Os endpoints de CSV nao substituem o banco do LinkGov. O frontend precisa de CRU
 de paginas, links, usuarios, permissoes, uploads, auditoria e analytics. Esse
 contrato continua implementado pela API Hono e passa a usar PostgreSQL.
 
-Antes do deploy, a equipe responsavel pelo SIM precisa confirmar:
+Antes do deploy, a equipe responsavel pelo SIM ainda precisa confirmar:
 
-1. Se `/api/login` recebe JSON ou `application/x-www-form-urlencoded`.
-2. Se `ref_cod_usuario` e um identificador estavel, imutavel e apropriado para
+1. Se `ref_cod_usuario` e um identificador estavel, imutavel e apropriado para
    vincular contas.
-3. O significado exato da resposta de `/api/validar-acesso`.
-4. Se `/api/logout` revoga imediatamente o JWT.
-5. Prazo de validade, rate limit e timeout oficial.
-6. Se os tokens incluem e validam `exp`, `iat`, `iss`, `aud` e `jti`.
-7. Procedimento de rotacao da chave de assinatura.
-8. Contato operacional para indisponibilidade e incidente de seguranca.
+2. Se `/api/logout` revoga imediatamente o JWT.
+3. Prazo de validade, rate limit e timeout oficial.
+4. Se os tokens incluem e validam `exp`, `iat`, `iss`, `aud` e `jti`.
+5. Procedimento de rotacao da chave de assinatura.
+6. Contato operacional para indisponibilidade e incidente de seguranca.
 
 ## Arquivos adicionados
 
@@ -96,7 +103,11 @@ Antes do deploy, a equipe responsavel pelo SIM precisa confirmar:
 - `server/postgres-d1.ts`: adaptador PostgreSQL para o contrato existente.
 - `server/filesystem-assets.ts`: armazenamento local com protecao contra path traversal.
 - `server/migrate.ts`: migrations transacionais com checksum.
-- `server/bootstrap-admin.ts`: cadastro interativo do primeiro admin.
+- `server/sim-check.ts`: teste interativo de login, validacao e logout sem
+  exibir credenciais.
+- `server/terminal-prompts.ts`: leitura de senha mascarada no terminal.
+- `server/bootstrap-admin.ts`: cadastro interativo do primeiro admin, vinculado
+  pela identidade validada no SIM.
 - `worker/sim-auth.ts`: login, validacao, logout e cifra de token SIM.
 - `migrations/postgres/0001_linkgov_schema.sql`: schema sem dados seed.
 - `.env.municipal.example`: nomes das variaveis, sem valores reais.
@@ -111,6 +122,12 @@ Remove-Item -LiteralPath "$env:TEMP\codex-clipboard-ffb3c952-0dd4-4e5d-b717-bd33
 Remove-Item -LiteralPath "$env:TEMP\codex-clipboard-8681ce4d-ec8c-4009-aa31-6185f249a092.png" -Force
 Remove-Item -LiteralPath "$env:TEMP\codex-clipboard-ade4668d-0233-44d8-a04b-fb00c5fa77fc.png" -Force
 Remove-Item -LiteralPath "$env:TEMP\codex-clipboard-5e99e694-45c6-4f69-afe4-6fa72047c7db.png" -Force
+Remove-Item -LiteralPath "$env:TEMP\codex-clipboard-274b36c7-3be5-46e8-a891-141a0c0d6c4a.png" -Force
+Remove-Item -LiteralPath "$env:TEMP\codex-clipboard-c2c891e0-63db-4dca-8f73-deaa993f8e2e.png" -Force
+Remove-Item -LiteralPath "$env:TEMP\codex-clipboard-8b0ea731-ef05-4bd0-8ef7-8637fefacbd3.png" -Force
+Remove-Item -LiteralPath "$env:TEMP\codex-clipboard-34f65ba8-b9c5-418a-93a8-a281d74a33d4.png" -Force
+Remove-Item -LiteralPath "$env:TEMP\codex-clipboard-a52ea858-c75a-4105-9bfb-7cf46e85e728.png" -Force
+Remove-Item -LiteralPath "$env:TEMP\codex-clipboard-57516410-a369-4ee8-98ac-72fb2f33319e.png" -Force
 ```
 
 Apagar as imagens nao revoga a credencial. A troca da senha e o encerramento das
@@ -217,22 +234,39 @@ ADMIN_BASE_URL=https://HOST-REAL
 ASSET_BASE_URL=https://HOST-REAL/api/assets
 ASSET_STORAGE_PATH=/var/lib/linkgov/assets
 DATABASE_URL=postgresql://USUARIO:SENHA@127.0.0.1:5432/linkgov
-SIM_API_BASE_URL=https://HOST-SIM-CONFIRMADO/default
+SIM_API_BASE_URL=https://sim.bc.sc.gov.br/default
 SIM_LOGIN_PATH=api/login
 SIM_VALIDATE_PATH=api/validar-acesso
 SIM_LOGOUT_PATH=api/logout
 SIM_LOGIN_CONTENT_TYPE=json
+SIM_CLIENT_TYPE=mobile
 SIM_SUBJECT_CLAIM=ref_cod_usuario
 SIM_TOKEN_ENCRYPTION_KEY=SEGREDO-GERADO-NO-SERVIDOR
 ```
 
-Se a equipe confirmar formulario em vez de JSON:
+Nao altere `SIM_CLIENT_TYPE` sem mudanca formal do contrato da API.
 
-```text
-SIM_LOGIN_CONTENT_TYPE=form
+## 7. Testar o contrato SIM sem expor o JWT
+
+Em uma estacao autorizada, na raiz do projeto:
+
+```powershell
+$env:SIM_API_BASE_URL = "https://sim.bc.sc.gov.br/default"
+npm run selfhosted:sim-check
 ```
 
-## 7. Aplicar migration sem dados reais
+Digite usuario e senha somente no prompt local. A senha aparece mascarada. O
+resultado esperado e:
+
+```text
+Login e validacao do SIM aprovados.
+Logout do SIM aprovado; o JWT foi descartado sem ser exibido ou salvo.
+```
+
+O comando nao cria usuario, nao grava banco e nao mostra payload ou JWT. Nao cole
+credenciais nem a resposta do login no chat.
+
+## 8. Aplicar migration sem dados reais
 
 Executar no servidor, a partir de `/opt/linkgov/current`:
 
@@ -251,10 +285,11 @@ Applied: 0001_linkgov_schema.sql
 Reexecucoes mostram `Already applied`. Se o checksum de uma migration aplicada
 mudar, o processo para sem executar SQL.
 
-## 8. Cadastrar o primeiro admin
+## 9. Cadastrar o primeiro admin
 
-O comando e interativo. Os valores ficam no terminal do servidor e nao devem ser
-enviados ao Codex:
+Depois da migration, o comando autentica o operador no SIM, usa somente o
+identificador interno retornado e encerra o JWT antes de gravar o administrador.
+Os valores ficam no terminal do servidor e nao devem ser enviados ao Codex:
 
 ```bash
 sudo -u linkgov /usr/bin/node \
@@ -264,15 +299,16 @@ sudo -u linkgov /usr/bin/node \
 
 Informar:
 
+- Usuario e senha institucionais no prompt mascarado.
 - Nome institucional.
 - E-mail institucional.
-- Identificador interno estavel do SIM.
 - Titulo e slug da primeira pagina.
 
-Nao informar CPF, senha ou JWT no campo de identificador. O script recusa criar
-outro bootstrap quando ja existe um admin.
+O script nunca solicita que o JWT seja copiado e recusa criar outro bootstrap
+quando ja existe um admin. O primeiro administrador ainda nao foi criado nesta
+preparacao, pois nao ha conexao com o PostgreSQL municipal.
 
-## 9. Criar o servico systemd
+## 10. Criar o servico systemd
 
 Criar `/etc/systemd/system/linkgov.service`:
 
@@ -318,7 +354,7 @@ sudo journalctl -u linkgov -n 100 --no-pager
 
 Nunca registrar corpo de login, cabecalho `Authorization`, cookie ou JWT.
 
-## 10. Configurar frontend
+## 11. Configurar frontend
 
 Criar `.env.municipal-production` apenas na maquina de build:
 
@@ -338,7 +374,7 @@ npm run build:selfhosted
 
 Publicar o conteudo de `dist/` no DocumentRoot do Apache.
 
-## 11. Configurar Apache e HTTPS
+## 12. Configurar Apache e HTTPS
 
 Exemplo a ser adaptado pela infraestrutura:
 
@@ -377,7 +413,7 @@ Exemplo a ser adaptado pela infraestrutura:
 Redirecionar HTTP para HTTPS em um VirtualHost separado. A chave privada TLS deve
 ter acesso restrito ao root/Apache.
 
-## 12. Testes de homologacao sem dados pessoais
+## 13. Testes de homologacao sem dados pessoais
 
 Usar contas e paginas sinteticas aprovadas pela prefeitura:
 
@@ -399,7 +435,7 @@ Usar contas e paginas sinteticas aprovadas pela prefeitura:
     gravacoes.
 14. Logs nao exibem senha, CPF, JWT, cookie ou `DATABASE_URL`.
 
-## 13. Migrar dados existentes
+## 14. Migrar dados existentes
 
 Esta etapa deve ser executada por DBA/infraestrutura autorizados:
 
@@ -417,7 +453,7 @@ Esta etapa deve ser executada por DBA/infraestrutura autorizados:
 Nao usar o endpoint `leitor-csv` como banco de producao sem contrato formal sobre
 autorizacao, isolamento, concorrencia, backup, auditoria e retencao.
 
-## 14. Corte e rollback
+## 15. Corte e rollback
 
 Ordem segura:
 
@@ -440,11 +476,12 @@ Rollback:
 Nao excluir Worker, D1, R2, Access ou DNS antes da homologacao e de autorizacao
 humana especifica. A exclusao e irreversivel e pode remover o unico rollback.
 
-## 15. Pendencias humanas
+## 16. Pendencias humanas
 
 - Trocar a senha e revogar a sessao exposta.
 - Remover as capturas temporarias.
-- Confirmar o contrato privado do SIM.
+- Confirmar com a equipe SIM a estabilidade do identificador e a revogacao no
+  logout.
 - Fornecer servidor, PostgreSQL, hostname e certificado.
 - Executar migration e bootstrap no servidor.
 - Exportar/importar dados por equipe autorizada.
@@ -456,7 +493,7 @@ humana especifica. A exclusao e irreversivel e pode remover o unico rollback.
 
 ```text
 TypeScript: aprovado
-Testes: 58 aprovados
+Testes: 61 aprovados
 Audit: 0 vulnerabilidades conhecidas
 Build frontend: aprovado
 Build backend Node: aprovado
