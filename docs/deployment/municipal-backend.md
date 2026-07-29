@@ -87,6 +87,11 @@ Os endpoints de CSV nao substituem o banco do LinkGov. O frontend precisa de CRU
 de paginas, links, usuarios, permissoes, uploads, auditoria e analytics. Esse
 contrato continua implementado pela API Hono e passa a usar PostgreSQL.
 
+Em 29/07/2026, o comando `selfhosted:sim-check` foi executado pelo operador em
+terminal local autorizado. Login, validacao e logout foram aprovados. A senha
+permaneceu mascarada e o JWT nao foi exibido nem salvo. Nenhum identificador do
+operador foi registrado neste documento.
+
 Antes do deploy, a equipe responsavel pelo SIM ainda precisa confirmar:
 
 1. Se `ref_cod_usuario` e um identificador estavel, imutavel e apropriado para
