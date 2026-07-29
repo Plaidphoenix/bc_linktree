@@ -1,6 +1,34 @@
 # LinkGov Institutional
 
-Plataforma institucional de agregador de links inspirada no fluxo do Linktree, com pagina publica responsiva, painel administrativo e API preparada para Cloudflare Workers + D1.
+Plataforma institucional de agregador de links com pagina publica responsiva,
+painel administrativo e API Hono. O destino recomendado agora e um servidor
+municipal com Node.js 22, PostgreSQL, Apache/HTTPS e identidade SIM. A configuracao
+Cloudflare permanece somente como rollback durante a migracao.
+
+## Backend municipal
+
+O backend auto-hospedado fica em:
+
+```txt
+server/
+migrations/postgres/
+worker/sim-auth.ts
+```
+
+Validacao:
+
+```bash
+npm ci
+npm run test
+npm run audit
+npm run build:selfhosted
+```
+
+O passo a passo sem credenciais reais esta em:
+
+```txt
+docs/deployment/municipal-backend.md
+```
 
 ## O que foi entregue
 

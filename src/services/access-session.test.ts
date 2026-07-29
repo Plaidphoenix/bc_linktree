@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { seedState } from "../data/seed";
 import { accessSessionStore, asReadOnlyAdminState } from "./access-session";
 
-describe("Cloudflare Access session persistence", () => {
+describe("institutional session persistence", () => {
   beforeEach(() => {
     localStorage.clear();
   });
@@ -23,6 +23,20 @@ describe("Cloudflare Access session persistence", () => {
 
     expect(accessSessionStore.getCachedAdminState()).toBeNull();
     expect(accessSessionStore.getLastAdminPath()).toBe("/admin/links");
+  });
+
+  it("expires offline session markers and cached data after eight hours", () => {
+    localStorage.setItem(
+      "linkgov.access-session",
+      JSON.stringify({ userId: seedState.user.id, updatedAt: "2000-01-01T00:00:00.000Z" })
+    );
+    localStorage.setItem(
+      "linkgov.admin-cache",
+      JSON.stringify({ state: seedState, savedAt: "2000-01-01T00:00:00.000Z" })
+    );
+
+    expect(accessSessionStore.hasSession()).toBe(false);
+    expect(accessSessionStore.getCachedAdminState()).toBeNull();
   });
 
   it("removes mutation permissions from cached offline state", () => {

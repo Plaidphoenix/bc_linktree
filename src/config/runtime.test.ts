@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isDemoFallbackEnabled, resolveFrontendAuthProvider } from "./runtime";
+import { isDemoFallbackEnabled, resolveFrontendAuthProvider, usesManagedSession } from "./runtime";
 
 describe("frontend demo fallback policy", () => {
   it("allows the demo fallback only while developing or testing", () => {
@@ -22,5 +22,12 @@ describe("frontend demo fallback policy", () => {
   it("accepts an explicit supported provider", () => {
     expect(resolveFrontendAuthProvider("production", "local")).toBe("local");
     expect(resolveFrontendAuthProvider("development", "ACCESS")).toBe("access");
+    expect(resolveFrontendAuthProvider("production", "SIM")).toBe("sim");
+  });
+
+  it("treats Access and SIM as server-managed sessions", () => {
+    expect(usesManagedSession("access")).toBe(true);
+    expect(usesManagedSession("sim")).toBe(true);
+    expect(usesManagedSession("local")).toBe(false);
   });
 });

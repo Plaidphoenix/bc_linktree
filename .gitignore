@@ -1,9 +1,12 @@
 node_modules/
 dist/
+dist-server/
 tmp/
 .wrangler/
 local-data/
 .dev.vars
 .env
 .env.local
+.env.municipal
+.env.municipal-production
 npm-debug.log*

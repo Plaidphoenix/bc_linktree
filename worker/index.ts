@@ -12,11 +12,21 @@ import {
   type PolicyProfileAccess,
   type PolicyUser
 } from "./policy";
+import {
+  authenticateSimCredentials,
+  decryptSimToken,
+  encryptSimToken,
+  isSimConfigured,
+  logoutSimToken,
+  SimAuthError,
+  simSessionTtlSeconds,
+  validateSimToken,
+  type SimAuthBindings
+} from "./sim-auth";
 
-export type Bindings = {
+export type Bindings = SimAuthBindings & {
   DB: D1Database;
   ASSETS?: R2Bucket;
-  ENVIRONMENT?: string;
   AUTH_PROVIDER?: string;
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
@@ -25,6 +35,7 @@ export type Bindings = {
   ASSET_BASE_URL?: string;
   EMAIL_WEBHOOK_URL?: string;
   EMAIL_WEBHOOK_TOKEN?: string;
+  SESSION_COOKIE_NAME?: string;
 };
 
 type UserRole = "ADMIN" | "GESTOR" | "EDITOR";
@@ -40,6 +51,7 @@ type UserRow = {
   description: string | null;
   status: UserStatus | null;
   active: number;
+  external_subject?: string | null;
 };
 
 type ProfileRow = {
@@ -108,6 +120,9 @@ app.use(
 );
 
 app.onError((error, c) => {
+  if (error instanceof SimAuthError) {
+    return c.json({ error: error.message, code: error.code }, error.status);
+  }
   console.error(error);
   return c.json({ error: "Erro interno da API." }, 500);
 });
@@ -118,6 +133,7 @@ app.get("/api/health", (c) =>
     service: "linkgov-institutional-api",
     environment: c.env.ENVIRONMENT || "unknown",
     authProvider: getAuthProvider(c.env),
+    identityConfigured: getAuthProvider(c.env) !== "sim" || isSimConfigured(c.env),
     timestamp: new Date().toISOString()
   })
 );
@@ -145,7 +161,8 @@ app.get("/api/assets/*", async (c) => {
 });
 
 app.post("/api/auth/login", async (c) => {
-  if (getAuthProvider(c.env) === "access") {
+  const provider = getAuthProvider(c.env);
+  if (provider === "access") {
     return c.json(
       {
         error:
@@ -156,8 +173,13 @@ app.post("/api/auth/login", async (c) => {
   }
 
   const body = await c.req.json().catch(() => null);
+  const password = String(body?.password || body?.pass || "");
+  if (provider === "sim") {
+    const identifier = sanitizeText(body?.identifier || body?.email || body?.user || "");
+    return loginWithSim(c, identifier, password);
+  }
+
   const email = sanitizeText(body?.email || "").toLowerCase();
-  const password = String(body?.password || "");
 
   if (!email || !password) {
     return c.json({ error: "Informe e-mail e senha." }, 400);
@@ -183,11 +205,13 @@ app.post("/api/auth/login", async (c) => {
 
   const token = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 8).toISOString();
+  const tokenHash = await sha256(token);
   await c.env.DB.prepare("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)")
-    .bind(token, row.id, expiresAt)
+    .bind(tokenHash, row.id, expiresAt)
     .run();
 
-  await logAudit(c.env.DB, row, "auth.login", "session", token, null, { provider: "local" });
+  setSessionCookie(c, token, expiresAt);
+  await logAudit(c.env.DB, row, "auth.login", "session", "local-session", null, { provider: "local" });
 
   return c.json({
     token,
@@ -196,30 +220,66 @@ app.post("/api/auth/login", async (c) => {
   });
 });
 
-app.get("/api/auth/access", authRequired, async (c) => {
+const sessionResponse = async (c: Context<AppEnv>) => {
   const user = c.get("user");
   return c.json({ user: serializeUser(user), provider: getAuthProvider(c.env) });
-});
+};
+
+app.get("/api/auth/session", authRequired, sessionResponse);
+app.get("/api/auth/access", authRequired, sessionResponse);
 
 app.get("/api/auth/access/start", authRequired, (c) => {
   c.header("Cache-Control", "no-store");
   return c.redirect(`${resolveAdminBaseUrl(c.req.url, c.env)}/admin/links`, 302);
 });
 
-app.post("/api/auth/logout", authRequired, async (c) => {
-  const token = getBearerToken(c.req.header("Authorization"));
+app.post("/api/auth/logout", async (c) => {
+  const token = getSessionToken(c.req.raw, c.env);
+  let providerLogout = true;
+  let actor: UserRow | null = null;
   if (token) {
-    await c.env.DB.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run();
+    const tokenHash = await sha256(token);
+    const session = await c.env.DB.prepare(
+      `SELECT s.provider, s.provider_token,
+              u.id, u.name, u.email, u.username, u.role, u.avatar, u.description, u.status, u.active
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.token = ?
+       LIMIT 1`
+    )
+      .bind(tokenHash)
+      .first<UserRow & { provider?: string; provider_token?: string }>();
+    actor = session;
+    await c.env.DB.prepare("DELETE FROM sessions WHERE token = ?").bind(tokenHash).run();
+
+    if (session?.provider === "sim" && session.provider_token) {
+      try {
+        await logoutSimToken(c.env, await decryptSimToken(c.env, session.provider_token));
+      } catch {
+        providerLogout = false;
+      }
+    }
   }
-  await logAudit(c.env.DB, c.get("user"), "auth.logout", "session", token || "access", null, {});
+  clearSessionCookie(c);
+  await logAudit(c.env.DB, actor, "auth.logout", "session", "current-session", null, {
+    provider: getAuthProvider(c.env),
+    providerLogout
+  });
   return c.json({ ok: true });
 });
 
 app.post("/api/auth/forgot-password", async (c) => {
-  if (getAuthProvider(c.env) === "access") {
+  const provider = getAuthProvider(c.env);
+  if (provider === "access") {
     return c.json({
       ok: true,
       message: "Este ambiente usa um codigo temporario enviado por e-mail e nao possui senha local."
+    });
+  }
+  if (provider === "sim") {
+    return c.json({
+      ok: true,
+      message: "A senha e administrada pelo provedor institucional e nao pode ser alterada no LinkGov."
     });
   }
 
@@ -266,8 +326,8 @@ app.post("/api/auth/forgot-password", async (c) => {
 });
 
 app.post("/api/auth/reset-password", async (c) => {
-  if (getAuthProvider(c.env) === "access") {
-    return c.json({ error: "Redefinicao de senha local desativada pelo Cloudflare Access." }, 409);
+  if (getAuthProvider(c.env) !== "local") {
+    return c.json({ error: "Redefinicao de senha local desativada pelo provedor institucional." }, 409);
   }
 
   const body = await c.req.json().catch(() => null);
@@ -742,21 +802,36 @@ app.post("/api/admin/users", authRequired, async (c) => {
   const email = sanitizeText(body?.email || "").toLowerCase();
   const username = cleanSlug(body?.username || email.split("@")[0] || crypto.randomUUID());
   const password = String(body?.password || "");
+  const provider = getAuthProvider(c.env);
+  const externalSubject = sanitizeExternalSubject(body?.externalSubject);
 
   if (!["ADMIN", "GESTOR", "EDITOR"].includes(role) || !email || !username) {
     return c.json({ error: "Dados de usuario invalidos." }, 400);
   }
 
-  if (getAuthProvider(c.env) === "local" && password.length < 10) {
+  if (provider === "local" && password.length < 10) {
     return c.json({ error: "A senha inicial deve ter pelo menos 10 caracteres." }, 400);
+  }
+
+  if (provider === "sim" && !externalSubject) {
+    return c.json({ error: "Informe o identificador interno do usuario no SIM." }, 400);
+  }
+
+  if (externalSubject) {
+    const linkedUser = await c.env.DB.prepare("SELECT id FROM users WHERE external_subject = ? LIMIT 1")
+      .bind(externalSubject)
+      .first<{ id: string }>();
+    if (linkedUser) {
+      return c.json({ error: "Este identificador SIM ja esta vinculado a outro usuario." }, 409);
+    }
   }
 
   const id = crypto.randomUUID();
   const passwordHash =
-    getAuthProvider(c.env) === "access" ? "CLOUDFLARE_ACCESS_ONLY" : await sha256(password);
+    provider === "local" ? await sha256(password) : provider === "sim" ? "SIM_IDENTITY_ONLY" : "CLOUDFLARE_ACCESS_ONLY";
   await c.env.DB.prepare(
-    `INSERT INTO users (id, name, email, password_hash, username, role, avatar, description, active, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO users (id, name, email, password_hash, username, role, avatar, description, active, status, external_subject)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -768,12 +843,17 @@ app.post("/api/admin/users", authRequired, async (c) => {
       "/assets/crest.svg",
       sanitizeText(body?.description || ""),
       status === "active" ? 1 : 0,
-      status
+      status,
+      externalSubject || null
     )
     .run();
 
   await grantUserProfilePermission(c.env.DB, user, id, role, body?.profileId, body?.linkIds);
-  await logAudit(c.env.DB, user, "user.created", "user", id, null, { role, status });
+  await logAudit(c.env.DB, user, "user.created", "user", id, null, {
+    role,
+    status,
+    identityLinked: Boolean(externalSubject)
+  });
 
   const created = await getUserById(c.env.DB, id);
   return c.json({ user: created ? serializeUser(created) : null }, 201);
@@ -793,9 +873,27 @@ app.patch("/api/admin/users/:id", authRequired, async (c) => {
   }
 
   const status = body?.status === undefined ? normalizeStatus(target.status) : normalizeStatus(body.status);
+  const externalSubject =
+    body?.externalSubject === undefined
+      ? target.external_subject || null
+      : sanitizeExternalSubject(body.externalSubject) || null;
+  if (getAuthProvider(c.env) === "sim" && !externalSubject) {
+    return c.json({ error: "O usuario precisa permanecer vinculado a uma identidade SIM." }, 400);
+  }
+  if (externalSubject && externalSubject !== target.external_subject) {
+    const linkedUser = await c.env.DB.prepare(
+      "SELECT id FROM users WHERE external_subject = ? AND id <> ? LIMIT 1"
+    )
+      .bind(externalSubject, id)
+      .first<{ id: string }>();
+    if (linkedUser) {
+      return c.json({ error: "Este identificador SIM ja esta vinculado a outro usuario." }, 409);
+    }
+  }
+
   await c.env.DB.prepare(
     `UPDATE users
-     SET name = ?, description = ?, active = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+     SET name = ?, description = ?, active = ?, status = ?, external_subject = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`
   )
     .bind(
@@ -803,12 +901,16 @@ app.patch("/api/admin/users/:id", authRequired, async (c) => {
       sanitizeText(body?.description ?? target.description ?? ""),
       status === "active" ? 1 : 0,
       status,
+      externalSubject,
       id
     )
     .run();
 
   await grantUserProfilePermission(c.env.DB, user, id, target.role, body?.profileId, body?.linkIds);
-  await logAudit(c.env.DB, user, "user.updated", "user", id, null, { status });
+  await logAudit(c.env.DB, user, "user.updated", "user", id, null, {
+    status,
+    identityLinked: Boolean(externalSubject)
+  });
 
   const updated = await getUserById(c.env.DB, id);
   return c.json({ user: updated ? serializeUser(updated) : null });
@@ -879,7 +981,7 @@ app.post("/api/admin/permissions", authRequired, async (c) => {
       .filter((linkId: string) => validIds.has(linkId))
       .map((linkId: string) =>
         c.env.DB.prepare(
-          "INSERT OR IGNORE INTO editor_link_permissions (id, user_id, profile_id, link_id, granted_by) VALUES (?, ?, ?, ?, ?)"
+          "INSERT INTO editor_link_permissions (id, user_id, profile_id, link_id, granted_by) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
         ).bind(crypto.randomUUID(), targetUserId, profileId, linkId, user.id)
       );
     if (statements.length) {
@@ -1008,6 +1110,54 @@ app.get("/api/admin/analytics", authRequired, async (c) => {
   });
 });
 
+async function loginWithSim(c: Context<AppEnv>, identifier: string, password: string) {
+  if (!identifier || !password) {
+    return c.json({ error: "Informe o usuario institucional e a senha." }, 400);
+  }
+
+  const authenticated = await authenticateSimCredentials(c.env, identifier, password);
+  const user = await c.env.DB.prepare(
+    `SELECT id, name, email, username, role, avatar, description, status, active, external_subject
+     FROM users
+     WHERE external_subject = ? AND active = 1 AND COALESCE(status, 'active') = 'active'
+     LIMIT 1`
+  )
+    .bind(authenticated.identity.subject)
+    .first<SessionUser>();
+
+  if (!user) {
+    return c.json(
+      {
+        error:
+          "A identidade foi validada pelo SIM, mas ainda nao possui permissao no LinkGov. Solicite o cadastro a um administrador."
+      },
+      403
+    );
+  }
+
+  const sessionToken = randomToken();
+  const expiresAt = new Date(Date.now() + simSessionTtlSeconds(c.env) * 1000).toISOString();
+  await c.env.DB.prepare(
+    `INSERT INTO sessions (token, user_id, expires_at, provider, provider_token)
+     VALUES (?, ?, ?, 'sim', ?)`
+  )
+    .bind(
+      await sha256(sessionToken),
+      user.id,
+      expiresAt,
+      await encryptSimToken(c.env, authenticated.token)
+    )
+    .run();
+
+  setSessionCookie(c, sessionToken, expiresAt);
+  await logAudit(c.env.DB, user, "auth.login", "session", "sim-session", null, { provider: "sim" });
+
+  return c.json({
+    expiresAt,
+    user: serializeUser(user)
+  });
+}
+
 async function authRequired(c: Context<AppEnv>, next: Next) {
   const provider = getAuthProvider(c.env);
   const user = provider === "access" ? await authenticateCloudflareAccess(c) : await authenticateSession(c);
@@ -1021,20 +1171,45 @@ async function authRequired(c: Context<AppEnv>, next: Next) {
 }
 
 async function authenticateSession(c: Context<AppEnv>) {
-  const token = getBearerToken(c.req.header("Authorization"));
+  const token = getSessionToken(c.req.raw, c.env);
   if (!token) {
     return null;
   }
 
-  return c.env.DB.prepare(
-    `SELECT u.id, u.name, u.email, u.username, u.role, u.avatar, u.description, u.status, u.active
+  const tokenHash = await sha256(token);
+  const session = await c.env.DB.prepare(
+    `SELECT u.id, u.name, u.email, u.username, u.role, u.avatar, u.description, u.status, u.active,
+            s.provider AS session_provider, s.provider_token
      FROM sessions s
      JOIN users u ON u.id = s.user_id
      WHERE s.token = ? AND s.expires_at > CURRENT_TIMESTAMP AND u.active = 1 AND COALESCE(u.status, 'active') = 'active'
      LIMIT 1`
   )
-    .bind(token)
-    .first<SessionUser>();
+    .bind(tokenHash)
+    .first<SessionUser & { session_provider?: string; provider_token?: string }>();
+
+  if (!session) {
+    return null;
+  }
+
+  if (getAuthProvider(c.env) === "sim") {
+    if (session.session_provider !== "sim" || !session.provider_token) {
+      await c.env.DB.prepare("DELETE FROM sessions WHERE token = ?").bind(tokenHash).run();
+      return null;
+    }
+
+    try {
+      await validateSimToken(c.env, await decryptSimToken(c.env, session.provider_token));
+    } catch (error) {
+      if (error instanceof SimAuthError && error.status === 401) {
+        await c.env.DB.prepare("DELETE FROM sessions WHERE token = ?").bind(tokenHash).run();
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  return session;
 }
 
 async function authenticateCloudflareAccess(c: Context<AppEnv>) {
@@ -1171,7 +1346,9 @@ async function getLinkById(db: D1Database, linkId: string) {
 
 async function getUserById(db: D1Database, userId: string) {
   return db
-    .prepare("SELECT id, name, email, username, role, avatar, description, status, active FROM users WHERE id = ? LIMIT 1")
+    .prepare(
+      "SELECT id, name, email, username, role, avatar, description, status, active, external_subject FROM users WHERE id = ? LIMIT 1"
+    )
     .bind(userId)
     .first<UserRow>();
 }
@@ -1219,7 +1396,9 @@ async function grantUserProfilePermission(
     .filter((linkId) => validIds.has(linkId))
     .map((linkId) =>
       db
-        .prepare("INSERT OR IGNORE INTO editor_link_permissions (id, user_id, profile_id, link_id, granted_by) VALUES (?, ?, ?, ?, ?)")
+        .prepare(
+          "INSERT INTO editor_link_permissions (id, user_id, profile_id, link_id, granted_by) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
+        )
         .bind(crypto.randomUUID(), targetUserId, normalizedProfileId, linkId, actor.id)
     );
 
@@ -1292,6 +1471,10 @@ function getBearerToken(header: string | undefined) {
   return type?.toLowerCase() === "bearer" && token ? token : null;
 }
 
+function getSessionToken(request: Request, env: Bindings) {
+  return getBearerToken(request.headers.get("Authorization") || undefined) || getCookie(request, sessionCookieName(env));
+}
+
 function getAccessJwt(request: Request) {
   return (
     request.headers.get("Cf-Access-Jwt-Assertion") ||
@@ -1310,7 +1493,49 @@ function getCookie(request: Request, name: string) {
 }
 
 function getAuthProvider(env: Bindings) {
-  return sanitizeText(env.AUTH_PROVIDER || "local").toLowerCase();
+  const provider = sanitizeText(env.AUTH_PROVIDER || "local").toLowerCase();
+  return provider === "access" || provider === "sim" ? provider : "local";
+}
+
+function setSessionCookie(c: Context<AppEnv>, token: string, expiresAt: string) {
+  const maxAge = Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
+  const attributes = [
+    `${sessionCookieName(c.env)}=${encodeURIComponent(token)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${maxAge}`,
+    `Expires=${new Date(expiresAt).toUTCString()}`
+  ];
+  if (!isDevelopmentEnvironment(c.env)) {
+    attributes.push("Secure");
+  }
+  c.header("Set-Cookie", attributes.join("; "));
+}
+
+function clearSessionCookie(c: Context<AppEnv>) {
+  const attributes = [
+    `${sessionCookieName(c.env)}=`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=0",
+    "Expires=Thu, 01 Jan 1970 00:00:00 GMT"
+  ];
+  if (!isDevelopmentEnvironment(c.env)) {
+    attributes.push("Secure");
+  }
+  c.header("Set-Cookie", attributes.join("; "));
+}
+
+function sessionCookieName(env: Bindings) {
+  const configured = sanitizeText(env.SESSION_COOKIE_NAME || "");
+  return /^[A-Za-z0-9_-]{1,40}$/.test(configured) ? configured : "linkgov_session";
+}
+
+function isDevelopmentEnvironment(env: Bindings) {
+  const environment = sanitizeText(env.ENVIRONMENT || "").toLowerCase();
+  return environment === "local" || environment === "development" || environment === "test";
 }
 
 export function isAllowedCorsOrigin(
@@ -1449,6 +1674,11 @@ function sanitizeText(value: unknown, max = 240) {
     .replace(/[\u0000-\u001f]/g, " ")
     .trim()
     .slice(0, max);
+}
+
+function sanitizeExternalSubject(value: unknown) {
+  const subject = sanitizeText(value, 160);
+  return /^[A-Za-z0-9._:@-]{1,160}$/.test(subject) ? subject : "";
 }
 
 function cleanSlug(value: unknown) {

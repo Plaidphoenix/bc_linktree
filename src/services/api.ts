@@ -6,7 +6,7 @@ import {
   seedState,
   seedUsers
 } from "../data/seed";
-import { runtimeConfig } from "../config/runtime";
+import { runtimeConfig, usesManagedSession } from "../config/runtime";
 import type { AdminPermissions, AdminState, Analytics, LinkItem, PublicProfile, User, UserStatus } from "../types";
 import { createId } from "../utils/id";
 import { accessSessionStore } from "./access-session";
@@ -17,7 +17,7 @@ const STATE_KEY = "linkgov.demo-state";
 const SELECTED_PROFILE_KEY = "linkgov.selected-profile";
 
 type LoginResult = {
-  token: string;
+  token?: string;
   expiresAt: string;
   user: User;
 };
@@ -61,23 +61,31 @@ export function getAccessLogoutUrl() {
   return buildAccessUrl(API_BASE, "/cdn-cgi/access/logout");
 }
 
-export async function getAccessSession() {
-  const result = await request<{ user: User; provider: string }>("/api/auth/access");
+export async function getInstitutionalSession() {
+  const path = runtimeConfig.authProvider === "sim" ? "/api/auth/session" : "/api/auth/access";
+  const result = await request<{ user: User; provider: string }>(path);
   accessSessionStore.mark(result.user);
   return result;
 }
 
-export async function login(email: string, password: string): Promise<LoginResult> {
+export async function login(identifier: string, password: string): Promise<LoginResult> {
   try {
     const result = await request<LoginResult>("/api/auth/login", {
       method: "POST",
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ identifier, email: identifier, password })
     });
-    sessionStore.setToken(result.token);
+    if (result.token) {
+      sessionStore.setToken(result.token);
+    } else {
+      sessionStore.clear();
+    }
+    if (usesManagedSession(runtimeConfig.authProvider)) {
+      accessSessionStore.mark(result.user);
+    }
     return result;
   } catch (error) {
     ensureDemoFallbackAllowed(error);
-    const localUser = seedUsers.find((user) => user.email.toLowerCase() === email.toLowerCase());
+    const localUser = seedUsers.find((user) => user.email.toLowerCase() === identifier.toLowerCase());
     if (!localUser || password !== DEMO_PASSWORD) {
       throw error instanceof ApiError ? error : new ApiError("Credenciais invalidas.", 401);
     }
@@ -152,7 +160,7 @@ export async function getAdminState(profileId?: string): Promise<AdminState> {
     const query = selectedProfileId ? `?profileId=${encodeURIComponent(selectedProfileId)}` : "";
     const state = await request<AdminState>(`/api/admin/me${query}`);
     persistSelectedProfile(state.profile.id);
-    if (runtimeConfig.authProvider === "access") {
+    if (usesManagedSession(runtimeConfig.authProvider)) {
       accessSessionStore.mark(state.user);
       accessSessionStore.cacheAdminState(state);
     }
@@ -161,7 +169,7 @@ export async function getAdminState(profileId?: string): Promise<AdminState> {
     if (!profileId && selectedProfileId && error instanceof ApiError && (error.status === 403 || error.status === 404)) {
       const state = await request<AdminState>("/api/admin/me");
       persistSelectedProfile(state.profile.id);
-      if (runtimeConfig.authProvider === "access") {
+      if (usesManagedSession(runtimeConfig.authProvider)) {
         accessSessionStore.mark(state.user);
         accessSessionStore.cacheAdminState(state);
       }
@@ -333,6 +341,7 @@ export async function createUser(payload: {
   role: User["role"];
   status: UserStatus;
   password?: string;
+  externalSubject?: string;
   description?: string;
   profileId?: string;
   linkIds?: string[];
@@ -451,8 +460,8 @@ async function request<T = unknown>(path: string, init: RequestInit = {}): Promi
   }
 
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { error?: string } | null;
-    throw new ApiError(body?.error || "Falha na comunicacao com a API.", response.status);
+    const body = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
+    throw new ApiError(body?.error || body?.message || "Falha na comunicacao com a API.", response.status);
   }
 
   return response.json() as Promise<T>;

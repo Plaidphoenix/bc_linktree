@@ -3,15 +3,17 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig(({ mode }) => {
   const workerProduction = mode === "worker-production";
+  const municipalProduction = mode === "municipal-production";
 
   return {
     plugins: [react()],
-    define: workerProduction
-      ? {
-          "import.meta.env.VITE_API_BASE_URL": JSON.stringify(""),
-          "import.meta.env.VITE_AUTH_PROVIDER": JSON.stringify("access")
-        }
-      : undefined,
+    define:
+      workerProduction || municipalProduction
+        ? {
+            "import.meta.env.VITE_API_BASE_URL": JSON.stringify(""),
+            "import.meta.env.VITE_AUTH_PROVIDER": JSON.stringify(workerProduction ? "access" : "sim")
+          }
+        : undefined,
     server: {
       proxy: {
         "/api": {

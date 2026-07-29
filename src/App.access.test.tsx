@@ -2,23 +2,28 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
-  getAccessSession: vi.fn(),
+  getInstitutionalSession: vi.fn(),
   getAdminState: vi.fn()
 }));
 
-vi.mock("./config/runtime", () => ({
-  runtimeConfig: {
-    apiBaseUrl: "https://api.example.workers.dev",
-    demoFallbackEnabled: false,
-    authProvider: "access"
-  }
-}));
+vi.mock("./config/runtime", async () => {
+  const actual = await vi.importActual<typeof import("./config/runtime")>("./config/runtime");
+  return {
+    ...actual,
+    runtimeConfig: {
+      apiBaseUrl: "https://api.example.workers.dev",
+      demoFallbackEnabled: false,
+      authProvider: "access",
+      simPasswordResetUrl: null
+    }
+  };
+});
 
 vi.mock("./services/api", async () => {
   const actual = await vi.importActual<typeof import("./services/api")>("./services/api");
   return {
     ...actual,
-    getAccessSession: apiMocks.getAccessSession,
+    getInstitutionalSession: apiMocks.getInstitutionalSession,
     getAdminState: apiMocks.getAdminState
   };
 });
@@ -33,7 +38,7 @@ describe("Cloudflare Access application flow", () => {
     localStorage.clear();
     window.history.pushState({}, "", "/");
     Object.defineProperty(window.navigator, "onLine", { configurable: true, value: true });
-    apiMocks.getAccessSession.mockReset().mockResolvedValue({ user: seedState.user, provider: "access" });
+    apiMocks.getInstitutionalSession.mockReset().mockResolvedValue({ user: seedState.user, provider: "access" });
     apiMocks.getAdminState.mockReset().mockResolvedValue(seedState);
   });
 
@@ -54,7 +59,7 @@ describe("Cloudflare Access application flow", () => {
     render(<App />);
 
     await waitFor(() => expect(window.location.pathname).toBe("/admin/appearance"));
-    expect(apiMocks.getAccessSession).toHaveBeenCalledOnce();
+    expect(apiMocks.getInstitutionalSession).toHaveBeenCalledOnce();
     expect(await screen.findByRole("heading", { level: 1, name: seedState.profile.title })).toBeInTheDocument();
   });
 
@@ -67,7 +72,7 @@ describe("Cloudflare Access application flow", () => {
       "href",
       "https://api.example.workers.dev/api/auth/access/start"
     );
-    expect(apiMocks.getAccessSession).not.toHaveBeenCalled();
+    expect(apiMocks.getInstitutionalSession).not.toHaveBeenCalled();
   });
 
   it("keeps cached admin data visible and read-only while offline", async () => {
@@ -83,6 +88,6 @@ describe("Cloudflare Access application flow", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(/ultima versao salva/i);
     expect(window.location.pathname).toBe("/admin/links");
     expect(screen.getByRole("button", { name: /adicionar novo link/i })).toBeDisabled();
-    expect(apiMocks.getAccessSession).not.toHaveBeenCalled();
+    expect(apiMocks.getInstitutionalSession).not.toHaveBeenCalled();
   });
 });

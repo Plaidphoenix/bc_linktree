@@ -6,10 +6,10 @@ const LAST_ADMIN_PATH_KEY = "linkgov.last-admin-path";
 const SELECTED_PROFILE_KEY = "linkgov.selected-profile";
 const DEFAULT_ADMIN_PATH = "/admin/links";
 const ADMIN_PATH_PATTERN = /^\/admin\/(links|appearance|analytics|pages|users|settings)$/;
+const MAX_OFFLINE_CACHE_AGE_MS = 8 * 60 * 60 * 1000;
 
 type AccessSessionRecord = {
   userId: string;
-  email: string;
   updatedAt: string;
 };
 
@@ -19,10 +19,9 @@ type CachedAdminState = {
 };
 
 export const accessSessionStore = {
-  mark(user: Pick<User, "id" | "email">) {
+  mark(user: Pick<User, "id">) {
     const record: AccessSessionRecord = {
       userId: user.id,
-      email: user.email,
       updatedAt: new Date().toISOString()
     };
     localStorage.setItem(ACCESS_SESSION_KEY, JSON.stringify(record));
@@ -30,7 +29,11 @@ export const accessSessionStore = {
 
   hasSession() {
     const session = readJson<AccessSessionRecord>(ACCESS_SESSION_KEY);
-    return Boolean(session?.userId && session.email);
+    if (!session?.userId || isExpired(session.updatedAt)) {
+      localStorage.removeItem(ACCESS_SESSION_KEY);
+      return false;
+    }
+    return true;
   },
 
   cacheAdminState(state: AdminState) {
@@ -43,7 +46,11 @@ export const accessSessionStore = {
 
   getCachedAdminState() {
     const cached = readJson<CachedAdminState>(ADMIN_CACHE_KEY);
-    return cached && isAdminState(cached.state) ? cached.state : null;
+    if (!cached || isExpired(cached.savedAt) || !isAdminState(cached.state)) {
+      localStorage.removeItem(ADMIN_CACHE_KEY);
+      return null;
+    }
+    return cached.state;
   },
 
   rememberAdminPath(path: string) {
@@ -64,6 +71,11 @@ export const accessSessionStore = {
     localStorage.removeItem(SELECTED_PROFILE_KEY);
   }
 };
+
+function isExpired(value: string) {
+  const timestamp = Date.parse(value);
+  return !Number.isFinite(timestamp) || Date.now() - timestamp > MAX_OFFLINE_CACHE_AGE_MS;
+}
 
 export function asReadOnlyAdminState(state: AdminState): AdminState {
   return {

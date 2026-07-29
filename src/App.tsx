@@ -18,12 +18,14 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   Activity,
+  AlertCircle,
   ArrowRight,
   BarChart3,
   Bell,
   Building2,
   CalendarDays,
   Check,
+  CheckCircle2,
   ChevronRight,
   ClipboardList,
   Copy,
@@ -32,6 +34,7 @@ import {
   FileText,
   GripVertical,
   HeartPulse,
+  Info,
   KeyRound,
   Link as LinkIconBase,
   LogOut,
@@ -45,6 +48,7 @@ import {
   ShieldCheck,
   Smartphone,
   Trash2,
+  TriangleAlert,
   Upload,
   UserRound,
   Users,
@@ -52,7 +56,7 @@ import {
   X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { runtimeConfig } from "./config/runtime";
+import { runtimeConfig, usesManagedSession } from "./config/runtime";
 import { DEMO_EMAIL, DEMO_PASSWORD } from "./data/seed";
 import {
   ApiError,
@@ -61,7 +65,7 @@ import {
   createUser,
   deleteLink,
   deleteUser,
-  getAccessSession,
+  getInstitutionalSession,
   getAccessLoginUrl,
   getAccessLogoutUrl,
   getAdminState,
@@ -133,21 +137,25 @@ export function App() {
 
 function LoginPage({ navigate }: { navigate: (to: string) => void }) {
   const accessLogin = runtimeConfig.authProvider === "access";
+  const simLogin = runtimeConfig.authProvider === "sim";
+  const managedLogin = usesManagedSession(runtimeConfig.authProvider);
+  const localDemo = runtimeConfig.authProvider === "local" && runtimeConfig.demoFallbackEnabled;
   const [checkingAccessSession, setCheckingAccessSession] = useState(
-    () => accessLogin && accessSessionStore.hasSession()
+    () => managedLogin && accessSessionStore.hasSession()
   );
-  const [email, setEmail] = useState(runtimeConfig.demoFallbackEnabled ? DEMO_EMAIL : "");
-  const [password, setPassword] = useState(runtimeConfig.demoFallbackEnabled ? DEMO_PASSWORD : "");
+  const [identifier, setIdentifier] = useState(localDemo ? DEMO_EMAIL : "");
+  const [password, setPassword] = useState(localDemo ? DEMO_PASSWORD : "");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
-  const [resetEmail, setResetEmail] = useState(runtimeConfig.demoFallbackEnabled ? DEMO_EMAIL : "");
+  const [resetEmail, setResetEmail] = useState(localDemo ? DEMO_EMAIL : "");
   const [resetMessage, setResetMessage] = useState("");
+  const [resetTone, setResetTone] = useState<"success" | "error">("success");
   const [resetLoading, setResetLoading] = useState(false);
 
   useEffect(() => {
-    if (!accessLogin || !accessSessionStore.hasSession()) {
+    if (!managedLogin || !accessSessionStore.hasSession()) {
       setCheckingAccessSession(false);
       return;
     }
@@ -165,7 +173,7 @@ function LoginPage({ navigate }: { navigate: (to: string) => void }) {
       }
 
       try {
-        await getAccessSession();
+        await getInstitutionalSession();
         if (!cancelled) {
           navigate(accessSessionStore.getLastAdminPath());
         }
@@ -183,7 +191,7 @@ function LoginPage({ navigate }: { navigate: (to: string) => void }) {
     return () => {
       cancelled = true;
     };
-  }, [accessLogin, navigate]);
+  }, [managedLogin, navigate]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -191,7 +199,7 @@ function LoginPage({ navigate }: { navigate: (to: string) => void }) {
     setError("");
 
     try {
-      await login(email, password);
+      await login(identifier, password);
       navigate("/admin/links");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Nao foi possivel entrar.");
@@ -206,8 +214,10 @@ function LoginPage({ navigate }: { navigate: (to: string) => void }) {
     setResetMessage("");
     try {
       const response = await requestPasswordReset(resetEmail);
+      setResetTone("success");
       setResetMessage(response.message || "Se o e-mail existir, enviaremos um link seguro para cadastrar uma nova senha.");
     } catch (err) {
+      setResetTone("error");
       setResetMessage(err instanceof Error ? err.message : "Nao foi possivel solicitar a redefinicao.");
     } finally {
       setResetLoading(false);
@@ -238,11 +248,15 @@ function LoginPage({ navigate }: { navigate: (to: string) => void }) {
         <div className="login-card">
           <BrandMark />
           <div>
-            <h2 id="login-title">{accessLogin ? "Acesso institucional" : "Entrar na conta"}</h2>
+            <h2 id="login-title">
+              {accessLogin ? "Acesso institucional" : simLogin ? "Acesso SIM" : "Entrar na conta"}
+            </h2>
             <p>
               {accessLogin
                 ? "Receba um codigo temporario no e-mail cadastrado para entrar com seguranca."
-                : "Portal de acesso para gestores e administradores institucionais."}
+                : simLogin
+                  ? "Use sua identidade institucional. A sessao fica protegida no servidor da prefeitura."
+                  : "Portal de acesso para gestores e administradores institucionais."}
             </p>
           </div>
           {accessLogin ? (
@@ -264,14 +278,14 @@ function LoginPage({ navigate }: { navigate: (to: string) => void }) {
           ) : (
             <form onSubmit={submit} className="form-stack">
               <label>
-                <span>E-mail institucional</span>
+                <span>{simLogin ? "Usuario institucional" : "E-mail institucional"}</span>
                 <span className="input-with-icon">
-                  <Mail size={18} />
+                  {simLogin ? <UserRound size={18} /> : <Mail size={18} />}
                   <input
-                    type="email"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                    autoComplete="email"
+                    type={simLogin ? "text" : "email"}
+                    value={identifier}
+                    onChange={(event) => setIdentifier(event.target.value)}
+                    autoComplete={simLogin ? "username" : "email"}
                     required
                   />
                 </span>
@@ -296,14 +310,14 @@ function LoginPage({ navigate }: { navigate: (to: string) => void }) {
               <button type="button" className="text-link align-right" onClick={() => setForgotOpen(true)}>
                 Esqueceu a senha?
               </button>
-              {error ? <p className="form-error">{error}</p> : null}
+              {error ? <AlertBanner tone="error">{error}</AlertBanner> : null}
               <button className="primary-action" type="submit" disabled={loading}>
-                {loading ? "Entrando..." : "Entrar no sistema"}
+                {loading ? "Entrando..." : simLogin ? "Entrar com SIM" : "Entrar no sistema"}
                 <ArrowRight size={18} />
               </button>
             </form>
           )}
-          {runtimeConfig.demoFallbackEnabled ? (
+          {localDemo ? (
             <div className="demo-box">
               <span>Credenciais demo</span>
               <code>{DEMO_EMAIL}</code>
@@ -315,7 +329,7 @@ function LoginPage({ navigate }: { navigate: (to: string) => void }) {
       {forgotOpen ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <div className="modal-card">
-            <h3>{accessLogin ? "Acesso sem senha" : "Redefinir senha"}</h3>
+            <h3>{accessLogin ? "Acesso sem senha" : simLogin ? "Senha institucional" : "Redefinir senha"}</h3>
             {accessLogin ? (
               <>
                 <p>O acesso institucional usa um codigo temporario enviado ao e-mail cadastrado. Nao existe senha local para redefinir.</p>
@@ -323,6 +337,25 @@ function LoginPage({ navigate }: { navigate: (to: string) => void }) {
                   <button type="button" className="primary-action compact" onClick={() => setForgotOpen(false)}>
                     Entendi
                   </button>
+                </div>
+              </>
+            ) : simLogin ? (
+              <>
+                <p>A senha e administrada pelo SIM e nunca e redefinida dentro do LinkGov.</p>
+                {!runtimeConfig.simPasswordResetUrl ? (
+                  <AlertBanner tone="warning">
+                    O endereco oficial de recuperacao ainda nao foi configurado. Procure o suporte do SIM.
+                  </AlertBanner>
+                ) : null}
+                <div className="modal-actions">
+                  <button type="button" className="secondary-action" onClick={() => setForgotOpen(false)}>
+                    Fechar
+                  </button>
+                  {runtimeConfig.simPasswordResetUrl ? (
+                    <a className="primary-action compact" href={runtimeConfig.simPasswordResetUrl}>
+                      <KeyRound size={16} /> Recuperar no SIM
+                    </a>
+                  ) : null}
                 </div>
               </>
             ) : (
@@ -341,7 +374,7 @@ function LoginPage({ navigate }: { navigate: (to: string) => void }) {
                     />
                   </span>
                 </label>
-                {resetMessage ? <p className="form-success">{resetMessage}</p> : null}
+                {resetMessage ? <AlertBanner tone={resetTone}>{resetMessage}</AlertBanner> : null}
                 <div className="modal-actions">
                   <button type="button" className="secondary-action" onClick={() => setForgotOpen(false)}>
                     Cancelar
@@ -442,8 +475,8 @@ function ResetPasswordPage({ navigate }: { navigate: (to: string) => void }) {
                 />
               </span>
             </label>
-            {error ? <p className="form-error">{error}</p> : null}
-            {message ? <p className="form-success">{message}</p> : null}
+            {error ? <AlertBanner tone="error">{error}</AlertBanner> : null}
+            {message ? <AlertBanner tone="success">{message}</AlertBanner> : null}
             <button className="primary-action" type="submit" disabled={loading || !token}>
               {loading ? "Salvando..." : "Atualizar senha"}
               <ArrowRight size={18} />
@@ -581,14 +614,14 @@ function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: st
   const [offline, setOffline] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const section = getAdminSection(path);
+  const managedSession = usesManagedSession(runtimeConfig.authProvider);
 
   useEffect(() => {
     accessSessionStore.rememberAdminPath(path);
   }, [path]);
 
   useEffect(() => {
-    const accessLogin = runtimeConfig.authProvider === "access";
-    if (!accessLogin && !sessionStore.getToken()) {
+    if (!managedSession && !sessionStore.getToken()) {
       navigate("/login");
       return;
     }
@@ -604,13 +637,13 @@ function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: st
       } catch (err) {
         if (cancelled) return;
 
-        if (accessLogin && err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+        if (managedSession && err instanceof ApiError && (err.status === 401 || err.status === 403)) {
           accessSessionStore.clear();
           navigate("/login");
           return;
         }
 
-        const cachedState = accessLogin ? accessSessionStore.getCachedAdminState() : null;
+        const cachedState = managedSession ? accessSessionStore.getCachedAdminState() : null;
         if (cachedState) {
           setState(cachedState);
           setOffline(true);
@@ -624,7 +657,7 @@ function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: st
 
     const handleOnline = () => void loadState();
     const handleOffline = () => {
-      if (accessLogin) setOffline(true);
+      if (managedSession) setOffline(true);
     };
 
     void loadState(true);
@@ -635,15 +668,15 @@ function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: st
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
     };
-  }, [navigate]);
+  }, [managedSession, navigate]);
 
-  const pushToast = (message: string, tone: Toast["tone"] = "success") => {
+  const pushToast = useCallback((message: string, tone: Toast["tone"] = "success") => {
     const toast = { id: createId("toast"), message, tone };
     setToasts((items) => [...items, toast]);
     window.setTimeout(() => {
       setToasts((items) => items.filter((item) => item.id !== toast.id));
     }, 3600);
-  };
+  }, []);
 
   const exit = async () => {
     await logout();
@@ -712,6 +745,7 @@ function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: st
             profiles={visibleState.profiles}
             activeProfile={visibleState.profile}
             links={visibleState.links}
+            pushToast={pushToast}
           />
         ) : null}
         {section === "settings" ? <SettingsPage user={visibleState.user} /> : null}
@@ -1552,6 +1586,7 @@ const emptyUserForm = {
   role: "EDITOR" as User["role"],
   status: "active" as UserStatus,
   password: runtimeConfig.authProvider === "local" ? "Admin@1234" : "",
+  externalSubject: "",
   description: "",
   profileId: "",
   linkIds: [] as string[]
@@ -1562,25 +1597,32 @@ function UsersPage({
   permissions,
   profiles,
   activeProfile,
-  links
+  links,
+  pushToast
 }: {
   currentUser: User;
   permissions: AdminPermissions;
   profiles: PublicProfile[];
   activeProfile: PublicProfile;
   links: LinkItem[];
+  pushToast: (message: string, tone?: Toast["tone"]) => void;
 }) {
   const [users, setUsers] = useState<User[]>([]);
   const [filter, setFilter] = useState("");
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({ ...emptyUserForm, profileId: activeProfile.id });
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
+  const [formError, setFormError] = useState("");
 
   useEffect(() => {
     if (permissions.canManageUsers) {
-      getUsers().then(setUsers);
+      getUsers()
+        .then(setUsers)
+        .catch((error) =>
+          pushToast(error instanceof Error ? error.message : "Nao foi possivel carregar os usuarios.", "error")
+        );
     }
-  }, [permissions.canManageUsers]);
+  }, [permissions.canManageUsers, pushToast]);
 
   useEffect(() => {
     setForm((current) => ({
@@ -1593,10 +1635,16 @@ function UsersPage({
 
   const submitUser = async (event: React.FormEvent) => {
     event.preventDefault();
-    const created = await createUser({ ...form, profileId: form.profileId || activeProfile.id });
-    setUsers((items) => [...items, created]);
-    setForm({ ...emptyUserForm, profileId: activeProfile.id });
-    setCreating(false);
+    setFormError("");
+    try {
+      const created = await createUser({ ...form, profileId: form.profileId || activeProfile.id });
+      setUsers((items) => [...items, created]);
+      setForm({ ...emptyUserForm, profileId: activeProfile.id });
+      setCreating(false);
+      pushToast("Usuario criado e vinculado com sucesso.");
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Nao foi possivel criar o usuario.");
+    }
   };
 
   const changeStatus = async (user: User, status: UserStatus) => {
@@ -1604,6 +1652,9 @@ function UsersPage({
     try {
       const updated = await updateUserStatus(user.id, status);
       setUsers((items) => items.map((item) => (item.id === user.id ? updated : item)));
+      pushToast("Status do usuario atualizado.", "info");
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : "Nao foi possivel alterar o status.", "error");
     } finally {
       setBusyUserId(null);
     }
@@ -1614,6 +1665,9 @@ function UsersPage({
     try {
       await deleteUser(user.id);
       await reloadUsers();
+      pushToast("Usuario excluido.");
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : "Nao foi possivel excluir o usuario.", "error");
     } finally {
       setBusyUserId(null);
     }
@@ -1693,9 +1747,16 @@ function UsersPage({
             <p>
               {runtimeConfig.authProvider === "access"
                 ? "Cadastre o e-mail que recebera o codigo temporario do acesso institucional."
+                : runtimeConfig.authProvider === "sim"
+                  ? "Vincule o cadastro ao identificador interno do SIM. CPF e JWT nao devem ser informados aqui."
                 : "Crie administradores, gestores ou editores locais para teste."}
             </p>
             <form className="form-grid user-form" onSubmit={submitUser}>
+              {formError ? (
+                <div className="span-2">
+                  <AlertBanner tone="error">{formError}</AlertBanner>
+                </div>
+              ) : null}
               <label>
                 <span>Nome</span>
                 <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
@@ -1727,6 +1788,18 @@ function UsersPage({
                     value={form.password}
                     onChange={(event) => setForm({ ...form, password: event.target.value })}
                     minLength={10}
+                    required
+                  />
+                </label>
+              ) : null}
+              {runtimeConfig.authProvider === "sim" ? (
+                <label>
+                  <span>Identificador interno SIM</span>
+                  <input
+                    value={form.externalSubject}
+                    onChange={(event) => setForm({ ...form, externalSubject: event.target.value })}
+                    autoComplete="off"
+                    maxLength={160}
                     required
                   />
                 </label>
@@ -2000,11 +2073,43 @@ function ToastStack({ toasts }: { toasts: Toast[] }) {
   return (
     <div className="toast-stack" aria-live="polite">
       {toasts.map((toast) => (
-        <div className={`toast ${toast.tone || "success"}`} key={toast.id}>
-          <Check size={16} />
+        <div className={`toast ${toast.tone || "success"}`} key={toast.id} role="status">
+          {toast.tone === "error" ? (
+            <AlertCircle size={18} />
+          ) : toast.tone === "info" ? (
+            <Info size={18} />
+          ) : (
+            <Check size={18} />
+          )}
           {toast.message}
         </div>
       ))}
+    </div>
+  );
+}
+
+function AlertBanner({
+  tone,
+  children
+}: {
+  tone: "error" | "success" | "warning" | "info";
+  children: React.ReactNode;
+}) {
+  const icon =
+    tone === "error" ? (
+      <AlertCircle size={19} />
+    ) : tone === "success" ? (
+      <CheckCircle2 size={19} />
+    ) : tone === "warning" ? (
+      <TriangleAlert size={19} />
+    ) : (
+      <Info size={19} />
+    );
+
+  return (
+    <div className={`alert-banner ${tone}`} role={tone === "error" ? "alert" : "status"}>
+      {icon}
+      <span>{children}</span>
     </div>
   );
 }
