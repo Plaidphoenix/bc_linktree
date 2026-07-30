@@ -27,6 +27,13 @@ describe("App critical flows", () => {
     expect(screen.getByText(/portal da transparencia/i)).toBeInTheDocument();
   });
 
+  it("renders the first public profile at the root route", async () => {
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: /secretaria municipal de saude/i })).toBeInTheDocument();
+    expect(screen.queryByText(/pagina nao encontrada/i)).not.toBeInTheDocument();
+  });
+
   it("opens the create-user dialog for admins", async () => {
     localStorage.setItem("linkgov.session", "demo-test");
     window.history.pushState({}, "", "/admin/users");

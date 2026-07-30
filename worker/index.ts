@@ -369,22 +369,37 @@ app.post("/api/auth/reset-password", async (c) => {
   return c.json({ ok: true });
 });
 
-app.get("/api/profiles/:slug", async (c) => {
-  const slug = cleanSlug(c.req.param("slug"));
-  const profile = await getProfileBySlug(c.env.DB, slug);
+app.get("/api/profiles", async (c) => {
+  const profile = await getDefaultPublicProfile(c.env.DB);
+  return publicProfileResponse(c, profile);
+});
 
+app.get("/api/profiles/:slug", async (c) => {
+  const profile = await getProfileBySlug(c.env.DB, cleanSlug(c.req.param("slug")));
+  return publicProfileResponse(c, profile);
+});
+
+app.post("/api/view/:profileId", async (c) => {
+  const profile = await getProfileById(c.env.DB, sanitizeText(c.req.param("profileId")));
   if (!profile || !profile.public) {
     return c.json({ error: "Perfil publico nao encontrado." }, 404);
   }
 
+  const body = await c.req.json().catch(() => null);
+  const viewId = sanitizeText(body?.viewId);
+  if (!/^view_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(viewId)) {
+    return c.json({ error: "Identificador de visualizacao invalido." }, 400);
+  }
+
   await c.env.DB.prepare(
-    "INSERT INTO events (id, profile_id, type, metadata) VALUES (?, ?, 'view', ?)"
+    `INSERT INTO events (id, profile_id, type, metadata)
+     VALUES (?, ?, 'view', NULL)
+     ON CONFLICT (id) DO NOTHING`
   )
-    .bind(crypto.randomUUID(), profile.id, JSON.stringify({ slug }))
+    .bind(viewId, profile.id)
     .run();
 
-  const links = await getLinks(c.env.DB, profile.id, { onlyActive: true });
-  return c.json({ profile: serializeProfile(profile), links: links.map(serializeLink) });
+  return c.json({ ok: true });
 });
 
 app.post("/api/click/:linkId", async (c) => {
@@ -1080,16 +1095,36 @@ app.get("/api/admin/analytics", authRequired, async (c) => {
     return c.json({ error: "Perfil nao encontrado ou nao autorizado." }, 404);
   }
 
-  const [views, clicks, topLinks] = await c.env.DB.batch([
-    c.env.DB.prepare("SELECT COUNT(*) AS total FROM events WHERE profile_id = ? AND type = 'view'").bind(profile.id),
-    c.env.DB.prepare("SELECT SUM(clicks) AS total FROM links WHERE profile_id = ?").bind(profile.id),
+  const [totals, timelineRows, topLinks] = await c.env.DB.batch([
+    c.env.DB
+      .prepare(
+        `SELECT
+           SUM(CASE WHEN type = 'view' THEN 1 ELSE 0 END) AS views,
+           SUM(CASE WHEN type = 'click' THEN 1 ELSE 0 END) AS clicks
+         FROM events
+         WHERE profile_id = ?`
+      )
+      .bind(profile.id),
+    c.env.DB
+      .prepare(
+        `SELECT
+           SUBSTR(CAST(created_at AS TEXT), 1, 10) AS day,
+           SUM(CASE WHEN type = 'view' THEN 1 ELSE 0 END) AS views,
+           SUM(CASE WHEN type = 'click' THEN 1 ELSE 0 END) AS clicks
+         FROM events
+         WHERE profile_id = ? AND created_at >= ?
+         GROUP BY SUBSTR(CAST(created_at AS TEXT), 1, 10)
+         ORDER BY day ASC`
+      )
+      .bind(profile.id, analyticsWindowStart()),
     c.env.DB.prepare(
       "SELECT id, title, url, clicks FROM links WHERE profile_id = ? ORDER BY clicks DESC, sort_order ASC LIMIT 6"
     ).bind(profile.id)
   ]);
 
-  const viewCount = Number((views.results?.[0] as { total?: number })?.total || 0) + 124800;
-  const clickCount = Number((clicks.results?.[0] as { total?: number })?.total || 0);
+  const totalRow = totals.results?.[0] as { views?: number | string; clicks?: number | string } | undefined;
+  const viewCount = Number(totalRow?.views || 0);
+  const clickCount = Number(totalRow?.clicks || 0);
   const ctr = viewCount ? Math.round((clickCount / viewCount) * 1000) / 10 : 0;
 
   return c.json({
@@ -1098,14 +1133,9 @@ app.get("/api/admin/analytics", authRequired, async (c) => {
       clicks: clickCount,
       ctr
     },
-    timeline: [
-      { label: "Seg", views: 42, clicks: 16 },
-      { label: "Ter", views: 60, clicks: 25 },
-      { label: "Qua", views: 85, clicks: 40 },
-      { label: "Qui", views: 55, clicks: 20 },
-      { label: "Sex", views: 70, clicks: 30 },
-      { label: "Sab", views: 65, clicks: 25 }
-    ],
+    timeline: buildAnalyticsTimeline(
+      timelineRows.results as Array<{ day: string; views: number | string; clicks: number | string }>
+    ),
     topLinks: topLinks.results
   });
 });
@@ -1329,6 +1359,21 @@ async function getProfileBySlug(db: D1Database, slug: string) {
   return db.prepare("SELECT * FROM profiles WHERE slug = ? LIMIT 1").bind(slug).first<ProfileRow>();
 }
 
+async function getDefaultPublicProfile(db: D1Database) {
+  return db
+    .prepare("SELECT * FROM profiles WHERE public = 1 ORDER BY created_at ASC, id ASC LIMIT 1")
+    .first<ProfileRow>();
+}
+
+async function publicProfileResponse(c: Context<AppEnv>, profile: ProfileRow | null) {
+  if (!profile || !profile.public) {
+    return c.json({ error: "Perfil publico nao encontrado." }, 404);
+  }
+
+  const links = await getLinks(c.env.DB, profile.id, { onlyActive: true });
+  return c.json({ profile: serializeProfile(profile), links: links.map(serializeLink) });
+}
+
 async function uniqueProfileSlug(db: D1Database, value: unknown) {
   const base = cleanSlug(value) || "pagina-publica";
   let slug = base;
@@ -1338,6 +1383,41 @@ async function uniqueProfileSlug(db: D1Database, value: unknown) {
     suffix += 1;
   }
   return slug;
+}
+
+function analyticsWindowStart(now = new Date()) {
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  start.setUTCDate(start.getUTCDate() - 6);
+  return `${start.toISOString().slice(0, 10)} 00:00:00`;
+}
+
+export function buildAnalyticsTimeline(
+  rows: Array<{ day: string; views: number | string; clicks: number | string }>,
+  now = new Date()
+) {
+  const counts = new Map(
+    rows.map((row) => [
+      row.day,
+      {
+        views: Number(row.views || 0),
+        clicks: Number(row.clicks || 0)
+      }
+    ])
+  );
+  const labels = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"];
+  const anchor = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(anchor);
+    date.setUTCDate(anchor.getUTCDate() - (6 - index));
+    const day = date.toISOString().slice(0, 10);
+    const values = counts.get(day) || { views: 0, clicks: 0 };
+    return {
+      label: labels[date.getUTCDay()],
+      views: values.views,
+      clicks: values.clicks
+    };
+  });
 }
 
 async function getProfileById(db: D1Database, id: string) {

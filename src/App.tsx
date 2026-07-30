@@ -55,7 +55,7 @@ import {
   WifiOff,
   X
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { runtimeConfig, usesManagedSession } from "./config/runtime";
 import { DEMO_EMAIL, DEMO_PASSWORD } from "./data/seed";
 import {
@@ -79,6 +79,7 @@ import {
   resetPassword,
   sessionStore,
   trackClick,
+  trackView,
   updateLink,
   updateProfile,
   updateUserStatus,
@@ -131,7 +132,7 @@ export function App() {
     return <AdminApp navigate={navigate} path={path} />;
   }
 
-  const slug = path.replace(/^\/@?/, "") || "saude";
+  const slug = path.replace(/^\/@?/, "") || undefined;
   return <PublicProfilePage slug={slug} navigate={navigate} />;
 }
 
@@ -491,21 +492,30 @@ function ResetPasswordPage({ navigate }: { navigate: (to: string) => void }) {
   );
 }
 
-function PublicProfilePage({ slug, navigate }: { slug: string; navigate: (to: string) => void }) {
+function PublicProfilePage({ slug, navigate }: { slug?: string; navigate: (to: string) => void }) {
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [links, setLinks] = useState<LinkItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const viewEvent = useRef({ route: "", id: "" });
+  const routeKey = slug || "__default__";
+
+  if (viewEvent.current.route !== routeKey) {
+    viewEvent.current = { route: routeKey, id: createId("view") };
+  }
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setError("");
+    const viewId = viewEvent.current.id;
     getPublicProfile(slug)
       .then((data) => {
         if (cancelled) return;
         setProfile(data.profile);
         setLinks(data.links);
         document.title = `${data.profile.title} | LinkGov Institutional`;
+        void trackView(data.profile.id, viewId);
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Perfil nao encontrado.");
@@ -1371,7 +1381,7 @@ function AnalyticsPage({ profileId }: { profileId: string }) {
     return <LoadingState label="Carregando analiticos..." inline />;
   }
 
-  const max = Math.max(...analytics.timeline.map((item) => item.views));
+  const max = Math.max(1, ...analytics.timeline.flatMap((item) => [item.views, item.clicks]));
 
   return (
     <section className="single-column-page">

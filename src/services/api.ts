@@ -137,13 +137,17 @@ export async function resetPassword(token: string, password: string) {
   });
 }
 
-export async function getPublicProfile(slug: string) {
+export async function getPublicProfile(slug?: string) {
+  const normalizedSlug = cleanSlug(slug || "");
   try {
-    return await request<{ profile: PublicProfile; links: LinkItem[] }>(`/api/profiles/${cleanSlug(slug)}`);
+    const path = normalizedSlug ? `/api/profiles/${normalizedSlug}` : "/api/profiles";
+    return await request<{ profile: PublicProfile; links: LinkItem[] }>(path);
   } catch (error) {
     ensureDemoFallbackAllowed(error);
     const stored = readStoredLocalState();
-    const profile = stored.profiles.find((item) => item.slug === cleanSlug(slug));
+    const profile = normalizedSlug
+      ? stored.profiles.find((item) => item.slug === normalizedSlug && item.public)
+      : stored.profiles.find((item) => item.public);
     if (!profile) {
       throw new ApiError("Perfil publico nao encontrado.", 404);
     }
@@ -430,6 +434,17 @@ export async function trackClick(link: LinkItem) {
   } catch (error) {
     ensureDemoFallbackAllowed(error);
     replaceLocalLink({ ...link, clicks: link.clicks + 1 });
+  }
+}
+
+export async function trackView(profileId: string, viewId: string) {
+  try {
+    await request(`/api/view/${encodeURIComponent(profileId)}`, {
+      method: "POST",
+      body: JSON.stringify({ viewId })
+    });
+  } catch (error) {
+    ensureDemoFallbackAllowed(error);
   }
 }
 
