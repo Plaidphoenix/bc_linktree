@@ -6,6 +6,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+trap {
+  Write-Host "Provisionamento nao concluido. Verifique a senha administrativa e tente novamente." -ForegroundColor Red
+  exit 1
+}
+
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $postgresBin = "C:\Program Files\PostgreSQL\18\bin"
 $psql = Join-Path $postgresBin "psql.exe"
@@ -66,12 +71,19 @@ function Invoke-Psql(
     "--set=ON_ERROR_STOP=1"
   )
 
-  if ($FromStandardInput) {
-    $output = $Command | & $psql @arguments --file=- 2>&1
-  } else {
-    $output = & $psql @arguments --tuples-only --no-align --command=$Command 2>&1
+  $previousErrorPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    if ($FromStandardInput) {
+      $output = $Command | & $psql @arguments --file=- 2>&1
+    } else {
+      $output = & $psql @arguments --tuples-only --no-align --command=$Command 2>&1
+    }
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorPreference
   }
-  if ($LASTEXITCODE -ne 0) {
+  if ($exitCode -ne 0) {
     throw "PostgreSQL rejected the requested administrative operation."
   }
   if ($Capture) {
