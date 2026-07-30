@@ -15,6 +15,9 @@ O projeto esta preparado para executar fora da Cloudflare com:
 - Cache administrativo offline somente leitura com validade maxima de oito horas.
 - Logs operacionais estruturados sem mensagem bruta do banco ou dados pessoais.
 
+Para a variante conteinerizada com persistencia e backup automatizado, consulte
+`docs/deployment/docker-self-hosted.md`.
+
 Nenhuma credencial real foi usada por automacao, enviada em comandos, persistida
 ou adicionada ao Git durante esta preparacao. O deploy nao foi executado porque
 faltam acesso ao servidor municipal, banco PostgreSQL e hostname definitivo.
@@ -221,11 +224,13 @@ Criar `/etc/linkgov/linkgov.env` com permissao `0640`, proprietario
 Gerar a chave de cifra diretamente no servidor:
 
 ```bash
-node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
+sudo install -d -o root -g linkgov -m 0750 /etc/linkgov/secrets
+sudo sh -c 'umask 077; openssl rand -base64 32 | tr "+/" "-_" | tr -d "=\n" > /etc/linkgov/secrets/sim_token_encryption_key'
 ```
 
-Colar o resultado somente em `SIM_TOKEN_ENCRYPTION_KEY` dentro do arquivo protegido.
-Nao enviar o valor para chat, Git, e-mail ou frontend.
+Gerar a senha do PostgreSQL pelo procedimento do DBA e armazena-la em
+`/etc/linkgov/secrets/postgres_password`. Os valores nao devem ser impressos,
+enviados para chat, Git, e-mail ou frontend.
 
 Valores obrigatorios:
 
@@ -238,7 +243,11 @@ APP_BASE_URL=https://HOST-REAL
 ADMIN_BASE_URL=https://HOST-REAL
 ASSET_BASE_URL=https://HOST-REAL/api/assets
 ASSET_STORAGE_PATH=/var/lib/linkgov/assets
-DATABASE_URL=postgresql://USUARIO:SENHA@127.0.0.1:5432/linkgov
+PGHOST=127.0.0.1
+PGPORT=5432
+PGDATABASE=linkgov
+PGUSER=linkgov
+PGPASSWORD_FILE=/etc/linkgov/secrets/postgres_password
 SIM_API_BASE_URL=https://sim.bc.sc.gov.br/default
 SIM_LOGIN_PATH=api/login
 SIM_VALIDATE_PATH=api/validar-acesso
@@ -246,7 +255,7 @@ SIM_LOGOUT_PATH=api/logout
 SIM_LOGIN_CONTENT_TYPE=json
 SIM_CLIENT_TYPE=mobile
 SIM_SUBJECT_CLAIM=ref_cod_usuario
-SIM_TOKEN_ENCRYPTION_KEY=SEGREDO-GERADO-NO-SERVIDOR
+SIM_TOKEN_ENCRYPTION_KEY_FILE=/etc/linkgov/secrets/sim_token_encryption_key
 ```
 
 Nao altere `SIM_CLIENT_TYPE` sem mudanca formal do contrato da API.
@@ -498,7 +507,7 @@ humana especifica. A exclusao e irreversivel e pode remover o unico rollback.
 
 ```text
 TypeScript: aprovado
-Testes: 61 aprovados
+Testes: 65 aprovados
 Audit: 0 vulnerabilidades conhecidas
 Build frontend: aprovado
 Build backend Node: aprovado

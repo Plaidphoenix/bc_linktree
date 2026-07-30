@@ -3,16 +3,15 @@ import { Pool } from "pg";
 import app, { type Bindings } from "../worker/index";
 import { FilesystemAssets } from "./filesystem-assets";
 import { PostgresD1Database } from "./postgres-d1";
+import { postgresPoolConfig, secretValue } from "./postgres-config";
 
-const databaseUrl = requiredEnvironment("DATABASE_URL");
 const assetPath = requiredEnvironment("ASSET_STORAGE_PATH");
 const appBaseUrl = requiredEnvironment("APP_BASE_URL");
 const port = numberEnvironment("PORT", 8787, 1, 65535);
 const hostname = process.env.HOST?.trim() || "127.0.0.1";
 const pool = new Pool({
-  connectionString: databaseUrl,
+  ...postgresPoolConfig("linkgov-institutional-api"),
   max: numberEnvironment("DATABASE_POOL_SIZE", 10, 1, 50),
-  application_name: "linkgov-institutional-api"
 });
 
 const bindings = {
@@ -33,7 +32,7 @@ const bindings = {
   SIM_LOGIN_CONTENT_TYPE: process.env.SIM_LOGIN_CONTENT_TYPE,
   SIM_CLIENT_TYPE: process.env.SIM_CLIENT_TYPE,
   SIM_SUBJECT_CLAIM: process.env.SIM_SUBJECT_CLAIM,
-  SIM_TOKEN_ENCRYPTION_KEY: process.env.SIM_TOKEN_ENCRYPTION_KEY,
+  SIM_TOKEN_ENCRYPTION_KEY: secretValue("SIM_TOKEN_ENCRYPTION_KEY"),
   SIM_REQUEST_TIMEOUT_MS: process.env.SIM_REQUEST_TIMEOUT_MS,
   SIM_SESSION_TTL_SECONDS: process.env.SIM_SESSION_TTL_SECONDS
 } as unknown as Bindings;

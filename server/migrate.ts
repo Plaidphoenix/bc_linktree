@@ -2,13 +2,12 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { Pool } from "pg";
+import { postgresPoolConfig } from "./postgres-config";
 
-const databaseUrl = requiredEnvironment("DATABASE_URL");
 const migrationsPath = resolve(process.env.MIGRATIONS_PATH || join(process.cwd(), "migrations", "postgres"));
 const pool = new Pool({
-  connectionString: databaseUrl,
+  ...postgresPoolConfig("linkgov-migrations"),
   max: 1,
-  application_name: "linkgov-migrations"
 });
 
 try {
@@ -59,12 +58,4 @@ try {
   }
 } finally {
   await pool.end();
-}
-
-function requiredEnvironment(name: string) {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
 }

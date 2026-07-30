@@ -1,0 +1,211 @@
+name: ${COMPOSE_PROJECT_NAME:-linkgov}
+
+x-database-environment: &database-environment
+  PGHOST: db
+  PGPORT: "5432"
+  PGDATABASE: ${POSTGRES_DB:-linkgov}
+  PGUSER: ${POSTGRES_USER:-linkgov}
+  PGPASSWORD_FILE: /run/secrets/postgres_app_password
+
+x-api-environment: &api-environment
+  <<: *database-environment
+  ENVIRONMENT: ${LINKGOV_ENVIRONMENT:-development}
+  AUTH_PROVIDER: sim
+  HOST: 0.0.0.0
+  PORT: "8787"
+  APP_BASE_URL: ${LINKGOV_APP_BASE_URL:-http://localhost:5173}
+  ADMIN_BASE_URL: ${LINKGOV_ADMIN_BASE_URL:-http://localhost:5173}
+  ASSET_BASE_URL: ${LINKGOV_ASSET_BASE_URL:-http://localhost:8787/api/assets}
+  ASSET_STORAGE_PATH: /var/lib/linkgov/assets
+  DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+  SESSION_COOKIE_NAME: linkgov_session
+  SIM_API_BASE_URL: ${SIM_API_BASE_URL:-https://sim.bc.sc.gov.br/default}
+  SIM_LOGIN_PATH: ${SIM_LOGIN_PATH:-api/login}
+  SIM_VALIDATE_PATH: ${SIM_VALIDATE_PATH:-api/validar-acesso}
+  SIM_LOGOUT_PATH: ${SIM_LOGOUT_PATH:-api/logout}
+  SIM_LOGIN_CONTENT_TYPE: ${SIM_LOGIN_CONTENT_TYPE:-json}
+  SIM_CLIENT_TYPE: ${SIM_CLIENT_TYPE:-mobile}
+  SIM_SUBJECT_CLAIM: ${SIM_SUBJECT_CLAIM:-ref_cod_usuario}
+  SIM_REQUEST_TIMEOUT_MS: ${SIM_REQUEST_TIMEOUT_MS:-8000}
+  SIM_SESSION_TTL_SECONDS: ${SIM_SESSION_TTL_SECONDS:-3600}
+  SIM_TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/sim_token_encryption_key
+
+services:
+  db:
+    image: ${LINKGOV_POSTGRES_IMAGE:-postgres:18.4-bookworm}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:-linkgov_admin}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --data-checksums
+      LINKGOV_DATABASE: ${POSTGRES_DB:-linkgov}
+      LINKGOV_USER: ${POSTGRES_USER:-linkgov}
+      LINKGOV_PASSWORD_FILE: /run/secrets/postgres_app_password
+    command:
+      - postgres
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - log_statement=none
+      - -c
+      - log_connections=off
+      - -c
+      - log_disconnections=off
+    secrets:
+      - postgres_admin_password
+      - postgres_app_password
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./docker/postgres/10-create-linkgov.sh:/docker-entrypoint-initdb.d/10-create-linkgov.sh:ro
+    networks:
+      - backend
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    stop_grace_period: 1m
+    shm_size: 256mb
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    image: ${LINKGOV_API_IMAGE:-linkgov-api:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      <<: *database-environment
+      MIGRATIONS_PATH: /app/dist-server/migrations
+    command: ["node", "dist-server/migrate.mjs"]
+    restart: "no"
+    secrets:
+      - postgres_app_password
+    networks:
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    image: ${LINKGOV_API_IMAGE:-linkgov-api:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    environment: *api-environment
+    secrets:
+      - postgres_app_password
+      - sim_token_encryption_key
+    volumes:
+      - assets_data:/var/lib/linkgov/assets
+    networks:
+      - backend
+      - egress
+    ports:
+      - "${LINKGOV_API_BIND:-127.0.0.1}:${LINKGOV_API_PORT:-8787}:8787"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8787/api/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  backup:
+    image: ${LINKGOV_POSTGRES_IMAGE:-postgres:18.4-bookworm}
+    restart: unless-stopped
+    user: "10001:10001"
+    entrypoint: ["/bin/sh", "/opt/linkgov/backup-loop.sh"]
+    environment:
+      <<: *database-environment
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_HEALTH_MAX_AGE_MINUTES: ${BACKUP_HEALTH_MAX_AGE_MINUTES:-1560}
+    secrets:
+      - postgres_app_password
+    volumes:
+      - ./docker/backup:/opt/linkgov:ro
+      - ${LINKGOV_BACKUP_PATH:-./local-data/backups}:/backups
+      - assets_data:/assets:ro
+    networks:
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test -s /backups/.last-success && find /backups/.last-success -mmin -"$${BACKUP_HEALTH_MAX_AGE_MINUTES}" -print -quit | grep -q .
+      interval: 15m
+      timeout: 10s
+      retries: 3
+      start_period: 2m
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  backup-verify:
+    image: ${LINKGOV_POSTGRES_IMAGE:-postgres:18.4-bookworm}
+    profiles: ["operations"]
+    user: "10001:10001"
+    entrypoint: ["/bin/sh", "/opt/linkgov/verify-backup.sh"]
+    volumes:
+      - ./docker/backup:/opt/linkgov:ro
+      - ${LINKGOV_BACKUP_PATH:-./local-data/backups}:/backups:ro
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  postgres_admin_password:
+    file: ${LINKGOV_POSTGRES_ADMIN_PASSWORD_FILE:-./local-data/secrets/postgres_admin_password}
+  postgres_app_password:
+    file: ${LINKGOV_POSTGRES_APP_PASSWORD_FILE:-./local-data/secrets/postgres_app_password}
+  sim_token_encryption_key:
+    file: ${LINKGOV_SIM_ENCRYPTION_KEY_FILE:-./local-data/secrets/sim_token_encryption_key}
+
+volumes:
+  postgres_data:
+  assets_data:
+
+networks:
+  backend:
+    internal: true
+  egress:

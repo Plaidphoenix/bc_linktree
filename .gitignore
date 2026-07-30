@@ -9,4 +9,5 @@ local-data/
 .env.local
 .env.municipal
 .env.municipal-production
+.env.docker
 npm-debug.log*

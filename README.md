@@ -2,8 +2,9 @@
 
 Plataforma institucional de agregador de links com pagina publica responsiva,
 painel administrativo e API Hono. O destino recomendado agora e um servidor
-municipal com Node.js 22, PostgreSQL, Apache/HTTPS e identidade SIM. A configuracao
-Cloudflare permanece somente como rollback durante a migracao.
+municipal com Node.js 22, PostgreSQL, Apache/HTTPS e identidade SIM. Docker Engine
+em Linux pode automatizar API, banco, migrations e backups sem hospedagem externa.
+A configuracao Cloudflare permanece somente como rollback durante a migracao.
 
 ## Backend municipal
 
@@ -28,6 +29,21 @@ O passo a passo sem credenciais reais esta em:
 
 ```txt
 docs/deployment/municipal-backend.md
+docs/deployment/docker-self-hosted.md
+```
+
+Preparacao local do Compose, sem imprimir secrets:
+
+```bash
+npm run docker:init
+npm run docker:config
+```
+
+Com o PostgreSQL 18 local ja instalado, a homologacao isolada pode ser preparada
+em prompt seguro:
+
+```powershell
+npm run postgres:provision:local
 ```
 
 ## O que foi entregue

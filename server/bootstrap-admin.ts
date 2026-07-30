@@ -6,15 +6,14 @@ import {
   SimAuthError,
   type SimAuthBindings
 } from "../worker/sim-auth";
+import { postgresPoolConfig } from "./postgres-config";
 import { assertInteractiveTerminal, readHidden, readVisible } from "./terminal-prompts";
 
-const databaseUrl = requiredEnvironment("DATABASE_URL");
 assertInteractiveTerminal();
 
 const pool = new Pool({
-  connectionString: databaseUrl,
+  ...postgresPoolConfig("linkgov-bootstrap"),
   max: 1,
-  application_name: "linkgov-bootstrap"
 });
 
 void bootstrap()
