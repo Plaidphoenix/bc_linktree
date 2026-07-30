@@ -4,6 +4,8 @@ dist-server/
 tmp/
 .wrangler/
 local-data/
+.playwright-cli/
+output/playwright/
 .dev.vars
 .env
 .env.local

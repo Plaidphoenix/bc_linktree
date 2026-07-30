@@ -90,6 +90,16 @@ Depois, para cadastrar o primeiro administrador:
 npm run municipal:bootstrap-admin
 ```
 
+Para iniciar API PostgreSQL e frontend local no modo SIM, sem credenciais ou
+fallback demo:
+
+```powershell
+npm run municipal:dev
+```
+
+O painel fica em `http://127.0.0.1:5173/login`. O comando `npm run dev` usa o
+ambiente demonstrativo e nao deve ser usado na homologacao municipal.
+
 Esses dados sao de homologacao e nao substituem o host municipal definitivo.
 
 ## Componentes entregues

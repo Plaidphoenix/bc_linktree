@@ -46,6 +46,16 @@ em prompt seguro:
 npm run postgres:provision:local
 ```
 
+Depois de aplicar a migration e cadastrar o primeiro administrador, inicie a
+homologacao local em modo SIM, sem fallback demo:
+
+```powershell
+npm run municipal:dev
+```
+
+Abra `http://127.0.0.1:5173/login`. O comando `npm run dev` permanece reservado
+ao ambiente demonstrativo com dados locais.
+
 ## O que foi entregue
 
 - Frontend React + Vite + TypeScript.

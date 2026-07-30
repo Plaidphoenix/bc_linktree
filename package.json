@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "concurrently -n API,WEB -c blue,green \"npm:dev:api:local\" \"npm:dev:web\"",
     "dev:web": "vite --host 0.0.0.0 --port 5173",
+    "dev:web:municipal": "vite --mode municipal-production --host 127.0.0.1 --port 5173",
     "dev:api": "npm run dev:api:local",
     "dev:api:local": "node scripts/local-api.mjs --host 0.0.0.0 --port 8787",
     "dev:api:selfhosted": "tsx server/index.ts",
@@ -20,6 +21,7 @@
     "selfhosted:sim-check": "tsx server/sim-check.ts",
     "postgres:provision:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/provision-local-postgres.ps1",
     "municipal:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-municipal-command.ps1 start",
+    "municipal:dev": "concurrently -n API,WEB -c blue,green \"npm:municipal:start\" \"npm:dev:web:municipal\"",
     "municipal:migrate": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-municipal-command.ps1 migrate",
     "municipal:bootstrap-admin": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-municipal-command.ps1 bootstrap-admin",
     "docker:init": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/docker-init-secrets.ps1",
