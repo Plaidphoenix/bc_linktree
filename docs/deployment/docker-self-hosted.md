@@ -63,8 +63,12 @@ WSL 2 sem distribuicao instalada
 PostgreSQL nativo 18.4 ativo na porta 5432
 ```
 
-O daemon Docker nao iniciou. A instalacao Desktop e antiga e o servico exige
-elevacao. Nenhum termo de licenca foi aceito e nenhum container foi criado.
+Em 31 de julho de 2026, o daemon do Docker Desktop respondeu e o `hello-world`
+terminou corretamente com codigo `0`. A versao Desktop 4.19.0/Engine 23.0.5 e
+antiga e nao foi usada para iniciar a stack do LinkGov. Como entidades
+governamentais precisam de assinatura paga para Docker Desktop, a homologacao
+real dos containers permanece reservada ao Docker Engine/Moby do servidor Linux
+aprovado, sem cadastro de pagamento.
 
 ## Homologacao PostgreSQL nativa no Windows
 
@@ -110,6 +114,8 @@ Esses dados sao de homologacao e nao substituem o host municipal definitivo.
 - `scripts/docker-init-secrets.ps1`: inicializacao segura no Windows.
 - `scripts/docker-init-secrets.sh`: inicializacao segura no Linux.
 - `scripts/provision-local-postgres.ps1`: banco isolado de homologacao no Windows.
+- `scripts/linux-preflight.sh`: inspecao somente leitura do servidor Linux.
+- `scripts/validate-docker-compose.mjs`: invariantes Compose em Windows/Linux.
 - `docker/backup/backup-once.sh`: backup atomico do banco e uploads.
 - `docker/backup/backup-loop.sh`: agendamento diario.
 - `docker/backup/verify-backup.sh`: checksum e validacao dos arquivos.
@@ -200,6 +206,9 @@ Teste:
 curl -fsS http://127.0.0.1:8787/api/health
 ```
 
+No container, a mesma porta tambem entrega o frontend compilado. Assim, `/`,
+`/@slug`, `/login` e `/admin/*` ficam na mesma origem da API.
+
 ## Primeiro administrador
 
 Depois que `api` estiver healthy:
@@ -288,12 +297,15 @@ replicacao/backup externo, monitoramento e procedimento formal de recuperacao.
 ## Validacao desta preparacao
 
 ```text
-Testes automatizados: 65 aprovados
+Testes automatizados: 70 aprovados
 Build Worker: aprovado
 Build municipal: aprovado
 Audit npm: 0 vulnerabilidades conhecidas
 Compose config: aprovado
-Invariantes de seguranca do Compose: 8 aprovadas
-Build/execucao real dos containers: bloqueado pelo daemon Desktop indisponivel
+Invariantes de seguranca do Compose: 10 aprovadas
+Frontend/API no runtime Node: aprovado em teste integrado
+Build/execucao real dos containers: reservado ao Docker Engine Linux aprovado
 Teste de backup e persistencia em container: pendente no Docker Engine Linux
 ```
+
+O handoff completo esta em `docs/deployment/linux-server-handoff.md`.

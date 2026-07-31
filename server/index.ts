@@ -1,4 +1,7 @@
 import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
+import { fileURLToPath } from "node:url";
+import { Hono } from "hono";
 import { Pool } from "pg";
 import app, { type Bindings } from "../worker/index";
 import { FilesystemAssets } from "./filesystem-assets";
@@ -37,13 +40,40 @@ const bindings = {
   SIM_SESSION_TTL_SECONDS: process.env.SIM_SESSION_TTL_SECONDS
 } as unknown as Bindings;
 
+const frontendRoot = fileURLToPath(new URL("../dist", import.meta.url));
+const nodeApp = new Hono();
+
+nodeApp.use("*", async (c, next) => {
+  await next();
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
+  c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+  c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+
+  if (c.req.path.startsWith("/assets/")) {
+    c.header("Cache-Control", "public, max-age=31536000, immutable");
+  } else if (!c.req.path.startsWith("/api/")) {
+    c.header("Cache-Control", "no-cache");
+  }
+});
+
+nodeApp.all("/api/*", (c) => app.fetch(c.req.raw, bindings));
+nodeApp.use("*", serveStatic({ root: frontendRoot }));
+nodeApp.get(
+  "*",
+  serveStatic({
+    root: frontendRoot,
+    rewriteRequestPath: () => "/index.html"
+  })
+);
+
 const server = serve({
-  fetch: (request) => app.fetch(request, bindings),
+  fetch: nodeApp.fetch,
   hostname,
   port
 });
 
-console.log(`LinkGov API listening on http://${hostname}:${port}`);
+console.log(`LinkGov listening on http://${hostname}:${port}`);
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {

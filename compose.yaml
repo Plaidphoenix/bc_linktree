@@ -13,8 +13,8 @@ x-api-environment: &api-environment
   AUTH_PROVIDER: sim
   HOST: 0.0.0.0
   PORT: "8787"
-  APP_BASE_URL: ${LINKGOV_APP_BASE_URL:-http://localhost:5173}
-  ADMIN_BASE_URL: ${LINKGOV_ADMIN_BASE_URL:-http://localhost:5173}
+  APP_BASE_URL: ${LINKGOV_APP_BASE_URL:-http://localhost:8787}
+  ADMIN_BASE_URL: ${LINKGOV_ADMIN_BASE_URL:-http://localhost:8787}
   ASSET_BASE_URL: ${LINKGOV_ASSET_BASE_URL:-http://localhost:8787/api/assets}
   ASSET_STORAGE_PATH: /var/lib/linkgov/assets
   DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
