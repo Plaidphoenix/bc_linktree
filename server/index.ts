@@ -1,10 +1,16 @@
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { createServer as createHttpsServer } from "node:https";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { Pool } from "pg";
 import app, { type Bindings } from "../worker/index";
 import { FilesystemAssets } from "./filesystem-assets";
+import {
+  assertSecureHostingConfiguration,
+  booleanEnvironment,
+  loadTlsServerOptions
+} from "./hosting-config";
 import { PostgresD1Database } from "./postgres-d1";
 import { postgresPoolConfig, secretValue } from "./postgres-config";
 
@@ -12,6 +18,16 @@ const assetPath = requiredEnvironment("ASSET_STORAGE_PATH");
 const appBaseUrl = requiredEnvironment("APP_BASE_URL");
 const port = numberEnvironment("PORT", 8787, 1, 65535);
 const hostname = process.env.HOST?.trim() || "127.0.0.1";
+const environment = process.env.ENVIRONMENT || "production";
+const tlsOptions = loadTlsServerOptions();
+const httpsTerminatedUpstream = booleanEnvironment(process.env.HTTPS_TERMINATED_UPSTREAM);
+assertSecureHostingConfiguration({
+  appBaseUrl,
+  environment,
+  hostname,
+  tlsEnabled: Boolean(tlsOptions),
+  httpsTerminatedUpstream
+});
 const pool = new Pool({
   ...postgresPoolConfig("linkgov-institutional-api"),
   max: numberEnvironment("DATABASE_POOL_SIZE", 10, 1, 50),
@@ -20,7 +36,7 @@ const pool = new Pool({
 const bindings = {
   DB: new PostgresD1Database(pool),
   ASSETS: new FilesystemAssets(assetPath),
-  ENVIRONMENT: process.env.ENVIRONMENT || "production",
+  ENVIRONMENT: environment,
   AUTH_PROVIDER: process.env.AUTH_PROVIDER || "sim",
   APP_BASE_URL: appBaseUrl,
   ADMIN_BASE_URL: process.env.ADMIN_BASE_URL || appBaseUrl,
@@ -67,13 +83,20 @@ nodeApp.get(
   })
 );
 
-const server = serve({
+const baseServerOptions = {
   fetch: nodeApp.fetch,
   hostname,
   port
-});
+};
+const server = tlsOptions
+  ? serve({
+      ...baseServerOptions,
+      createServer: createHttpsServer,
+      serverOptions: tlsOptions
+    })
+  : serve(baseServerOptions);
 
-console.log(`LinkGov listening on http://${hostname}:${port}`);
+console.log(`LinkGov listening on ${tlsOptions ? "https" : "http"}://${hostname}:${port}`);
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {

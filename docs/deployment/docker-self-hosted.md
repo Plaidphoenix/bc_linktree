@@ -302,7 +302,7 @@ Build Worker: aprovado
 Build municipal: aprovado
 Audit npm: 0 vulnerabilidades conhecidas
 Compose config: aprovado
-Invariantes de seguranca do Compose: 10 aprovadas
+Invariantes de seguranca do Compose: 11 aprovadas
 Frontend/API no runtime Node: aprovado em teste integrado
 Build/execucao real dos containers: reservado ao Docker Engine Linux aprovado
 Teste de backup e persistencia em container: pendente no Docker Engine Linux

@@ -24,6 +24,11 @@
     "municipal:dev": "node scripts/check-municipal-ports.mjs && concurrently --kill-others-on-fail -n API,WEB -c blue,green \"npm:municipal:start\" \"npm:dev:web:municipal\"",
     "municipal:migrate": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-municipal-command.ps1 migrate",
     "municipal:bootstrap-admin": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-municipal-command.ps1 bootstrap-admin",
+    "windows-host:certificate": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/new-windows-lan-certificate.ps1",
+    "windows-host:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-windows-host.ps1 start",
+    "windows-host:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-windows-host.ps1 status",
+    "windows-host:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-windows-host.ps1 stop",
+    "windows-host:firewall:preview": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/configure-windows-lan-firewall.ps1",
     "docker:init": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/docker-init-secrets.ps1",
     "docker:config": "docker compose --env-file .env.docker.example config",
     "docker:validate": "node scripts/validate-docker-compose.mjs",
@@ -64,7 +69,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@hono/node-server": "^2.0.12",
-    "hono": "^4.12.26",
+    "hono": "^4.13.0",
     "jose": "^6.2.3",
     "lucide-react": "^1.21.0",
     "pg": "^8.22.0",
@@ -87,6 +92,9 @@
     "typescript": "^6.0.3",
     "vite": "^6.4.3",
     "vitest": "^4.1.9",
-    "wrangler": "^4.111.0"
+    "wrangler": "^4.118.0"
+  },
+  "overrides": {
+    "undici": "7.29.0"
   }
 }

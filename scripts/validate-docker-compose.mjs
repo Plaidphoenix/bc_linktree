@@ -46,7 +46,10 @@ const checks = {
     database.environment?.POSTGRES_USER !== api.environment?.PGUSER,
   ApplicationPasswordUsesSeparateSecret:
     api.environment?.PGPASSWORD_FILE === "/run/secrets/postgres_app_password" &&
-    apiSecrets.includes("postgres_app_password")
+    apiSecrets.includes("postgres_app_password"),
+  ProductionDeclaresHttpsTermination:
+    api.environment?.ENVIRONMENT !== "production" ||
+    api.environment?.HTTPS_TERMINATED_UPSTREAM === "true"
 };
 
 const failed = Object.entries(checks)

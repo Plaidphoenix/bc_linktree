@@ -31,6 +31,7 @@ O passo a passo sem credenciais reais esta em:
 docs/deployment/municipal-backend.md
 docs/deployment/docker-self-hosted.md
 docs/deployment/linux-server-handoff.md
+docs/deployment/windows-temporary-host.md
 ```
 
 Preparacao local do Compose, sem imprimir secrets:
