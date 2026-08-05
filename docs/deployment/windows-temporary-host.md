@@ -10,17 +10,18 @@ homologacao municipal enquanto o servidor Linux definitivo nao esta disponivel.
 Dispositivo na rede 10.170.0.0/22
               |
               v
-HTTPS 10.170.1.27:9443
-              |
-              v
-Node.js (React + Hono)
+Nginx HTTP 80 -> HTTPS 443
+       |              |
+       |              `-- / e arquivos estaticos -> React em dist/
+       `-- /api/* -> Node/Hono HTTPS 127.0.0.1:9443
               |
               v
 PostgreSQL local 127.0.0.1:5432
 ```
 
-Somente a porta HTTPS `9443` deve ser liberada para a sub-rede local. A porta do
-PostgreSQL nunca deve ser publicada para celulares ou outros computadores.
+Somente as portas `80` e `443` devem ser liberadas para a sub-rede local. Node
+`9443` fica restrito ao loopback e a porta do PostgreSQL nunca deve ser
+publicada para celulares ou outros computadores.
 Nesta maquina, `8443` ja pertence a um processo Apache e nao deve ser encerrada
 ou reutilizada pelo LinkGov.
 
@@ -46,6 +47,10 @@ de certificado. A instalacao desse certificado nos dispositivos, ou a emissao
 de um certificado pela autoridade certificadora municipal, exige aprovacao da
 equipe responsavel.
 
+O service worker que permite abrir uma pagina ja visitada com o host fora do ar
+so e habilitado quando o certificado esta realmente confiado pelo sistema. Apenas
+clicar em "avancar" no aviso do navegador nao habilita esse recurso.
+
 Para usar um PFX emitido pela prefeitura, informe os dois arquivos sem colocar a
 senha na linha de comando:
 
@@ -60,23 +65,32 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-windows-host.ps1
 Na raiz do projeto:
 
 ```powershell
-npm run windows-host:start
-npm run windows-host:status
+npm run windows-stack:start
+npm run windows-stack:status
 ```
 
-O comando executa novo build, inicia um processo oculto e valida
-`/api/health`. Estado e logs ficam em `local-data/runtime`, fora do Git.
+Este e o comando cotidiano depois de ligar ou reiniciar a maquina. Ele preserva
+o build existente, inicia Node e Nginx em processos ocultos e valida o estado.
+Estado e logs ficam em `local-data`, fora do Git.
+
+Depois de atualizar o codigo, gere o build antes de reiniciar a pilha:
+
+```powershell
+npm run build:selfhosted
+npm run windows-stack:stop
+npm run windows-stack:start
+```
 
 URL atual esperada:
 
 ```text
-https://10.170.1.27:9443
+https://10.170.1.27
 ```
 
-Para parar sem afetar o PostgreSQL:
+Para parar frontend e API sem apagar nem parar o PostgreSQL:
 
 ```powershell
-npm run windows-host:stop
+npm run windows-stack:stop
 ```
 
 ## Firewall com confirmacao humana
@@ -84,17 +98,20 @@ npm run windows-host:stop
 Primeiro visualize a regra, sem alterar o Windows:
 
 ```powershell
-npm run windows-host:firewall:preview
+npm run windows-proxy:http-firewall:preview
+npm run windows-proxy:firewall:preview
 ```
 
-A regra proposta permite apenas `TCP 9443` da sub-rede `10.170.0.0/22`, nos
-perfis `Domain` e `Private`. Ela nao libera `5432`.
+As regras propostas permitem apenas `TCP 80` e `TCP 443` da sub-rede
+`10.170.0.0/22`, nos perfis `Domain` e `Private`. Elas nao liberam `5432` nem
+`9443`.
 
 Depois da revisao, abra PowerShell como administrador e aplique explicitamente:
 
 ```powershell
-cd "C:\Users\52008160840\Documents\linktree - bc 2026"
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/configure-windows-lan-firewall.ps1 -Apply
+cd "C:\Users\<usuario-windows>\Documents\linktree - bc 2026"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/configure-windows-lan-firewall.ps1 -Port 80 -Apply
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/configure-windows-lan-firewall.ps1 -Port 443 -Apply
 ```
 
 O script nao solicita elevacao, nao substitui regra existente e nao altera
@@ -104,12 +121,62 @@ roteador, DNS ou firewall externo.
 
 1. Conectar o dispositivo a rede municipal correspondente.
 2. Confirmar que o endereco recebido pertence ao alcance autorizado.
-3. Abrir `https://10.170.1.27:9443`.
+3. Abrir `https://10.170.1.27`.
 4. Validar primeiro uma pagina publica, sem credenciais.
 5. Usar login somente quando o certificado estiver confiavel e sem aviso.
 
 Se o acesso falhar, registrar apenas horario, dispositivo, URL e mensagem. Nao
 enviar senha, cookie, JWT ou conteudo do arquivo `.env.municipal`.
+
+## Nginx para frontend resiliente e API na porta 443
+
+O Nginx termina HTTPS na porta `443`, redireciona `80` para HTTPS, serve o build
+React diretamente e encaminha somente `/api/*` para `127.0.0.1:9443`. Se Node
+ou PostgreSQL ficarem temporariamente indisponiveis, o frontend continua abrindo
+e informa que esta exibindo a ultima copia publica ou administrativa disponivel.
+
+Segundo a documentacao oficial, Nginx para Windows e uma versao beta e nao deve
+ser o proxy de producao. O destino definitivo deve usar Nginx em Linux ou o
+proxy reverso institucional. Os exemplos de handoff estao em `deploy/nginx`.
+
+O ZIP deve vir de `https://nginx.org/download/`. O script localiza `nginx-*` em
+Documentos e usa configuracao isolada. O certificado e a chave PEM ficam em
+`local-data/certificates`, ignorados pelo Git e com ACL privada. Nenhuma senha ou
+chave e impressa no terminal.
+
+```powershell
+npm run windows-proxy:start
+npm run windows-proxy:status
+```
+
+Antes do primeiro teste em outro dispositivo, visualize as regras das portas 80
+e 443:
+
+```powershell
+npm run windows-proxy:http-firewall:preview
+npm run windows-proxy:firewall:preview
+```
+
+A aplicacao da regra exige PowerShell como administrador e aprovacao humana:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File scripts/configure-windows-lan-firewall.ps1 -Port 80 -Apply
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File scripts/configure-windows-lan-firewall.ps1 -Port 443 -Apply
+```
+
+O Nginx nao publica a maquina na internet e nao cria DNS. Para um dominio
+interno dedicado, a infraestrutura deve criar um unico registro A, por exemplo
+`linkgov-homolog.pmbcsc.sc.gov.br -> 10.170.1.27`, e emitir um certificado que
+contenha esse nome. O hostname atual da estacao nao deve ser usado como dominio
+do sistema porque resolve tambem para interfaces virtuais locais.
+
+Para parar somente o proxy:
+
+```powershell
+npm run windows-proxy:stop
+```
 
 ## Acesso fora da rede local
 
@@ -126,7 +193,7 @@ FQDN + certificado municipal + firewall/WAF
 Proxy reverso institucional
    |
    v
-10.170.1.27:9443
+10.170.1.27:443
 ```
 
 A infraestrutura deve aprovar antes de qualquer alteracao:
@@ -145,8 +212,16 @@ provedor. Ela nao sera criada automaticamente nem usada sem nova aprovacao.
 
 ## Limites operacionais
 
-- Se a maquina desligar, suspender ou perder rede, o sistema fica indisponivel.
-- O processo Node precisa ser iniciado novamente apos reiniciar o Windows.
+- PostgreSQL preserva dados confirmados mesmo quando seus processos param. Ele
+  nao preserva uma alteracao que nunca chegou ao banco.
+- O cache do navegador e somente leitura: nunca finge que uma edicao offline foi
+  salva e nunca armazena senha, JWT, usuario ou resposta administrativa da API.
+- Com Nginx ativo e API parada, o frontend abre e usa a ultima copia permitida.
+- Com a maquina ou o Nginx desligados, somente dispositivos que ja visitaram a
+  mesma URL com certificado confiado podem abrir o app shell do service worker.
+- Um dispositivo novo nao consegue baixar o site enquanto o host esta desligado.
+- Node e Nginx precisam ser iniciados novamente apos reiniciar o Windows com
+  `npm run windows-stack:start`. Inicializacao automatica ainda nao foi instalada.
 - O certificado de homologacao expira em 30 dias.
 - O IP atual pode mudar sem reserva DHCP.
 - Backup no mesmo disco nao protege contra perda fisica da maquina.

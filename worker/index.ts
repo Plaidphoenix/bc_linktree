@@ -21,7 +21,8 @@ import {
   SimAuthError,
   simSessionTtlSeconds,
   validateSimToken,
-  type SimAuthBindings
+  type SimAuthBindings,
+  type SimIdentity
 } from "./sim-auth";
 
 export type Bindings = SimAuthBindings & {
@@ -40,6 +41,7 @@ export type Bindings = SimAuthBindings & {
 
 type UserRole = "ADMIN" | "GESTOR" | "EDITOR";
 type UserStatus = "active" | "inactive" | "suspended";
+type SimAccessRequestStatus = "pending" | "approved" | "rejected";
 
 type UserRow = {
   id: string;
@@ -52,6 +54,18 @@ type UserRow = {
   status: UserStatus | null;
   active: number;
   external_subject?: string | null;
+};
+
+type SimAccessRequestRow = {
+  id: string;
+  external_subject: string;
+  display_name: string;
+  institutional_email: string | null;
+  status: SimAccessRequestStatus;
+  attempts_count: number;
+  requested_at: unknown;
+  last_attempt_at: unknown;
+  reviewed_at?: unknown;
 };
 
 type ProfileRow = {
@@ -216,13 +230,13 @@ app.post("/api/auth/login", async (c) => {
   return c.json({
     token,
     expiresAt,
-    user: serializeUser(row)
+    user: serializeUser(row, c.env)
   });
 });
 
 const sessionResponse = async (c: Context<AppEnv>) => {
   const user = c.get("user");
-  return c.json({ user: serializeUser(user), provider: getAuthProvider(c.env) });
+  return c.json({ user: serializeUser(user, c.env), provider: getAuthProvider(c.env) });
 };
 
 app.get("/api/auth/session", authRequired, sessionResponse);
@@ -429,9 +443,9 @@ app.get("/api/admin/me", authRequired, async (c) => {
   const allProfiles = await getAuthorizedProfiles(c.env.DB, user);
   const links = await getLinks(c.env.DB, profile.id);
   return c.json({
-    user: serializeUser(user),
-    profile: serializeProfile(profile),
-    profiles: allProfiles.map(serializeProfile),
+    user: serializeUser(user, c.env),
+    profile: serializeProfile(profile, c.env),
+    profiles: allProfiles.map((item) => serializeProfile(item, c.env)),
     links: links.map(serializeLink),
     permissions: await buildPermissions(c.env.DB, user, profile, links)
   });
@@ -440,7 +454,7 @@ app.get("/api/admin/me", authRequired, async (c) => {
 app.get("/api/admin/profiles", authRequired, async (c) => {
   const user = c.get("user");
   const profiles = await getAuthorizedProfiles(c.env.DB, user);
-  return c.json({ profiles: profiles.map(serializeProfile) });
+  return c.json({ profiles: profiles.map((item) => serializeProfile(item, c.env)) });
 });
 
 app.post("/api/admin/profiles", authRequired, async (c) => {
@@ -486,7 +500,7 @@ app.post("/api/admin/profiles", authRequired, async (c) => {
 
   const profile = await getProfileById(c.env.DB, id);
   await logAudit(c.env.DB, user, "profile.created", "profile", id, id, { slug, ownerId: owner.id });
-  return c.json({ profile: profile ? serializeProfile(profile) : null }, 201);
+  return c.json({ profile: profile ? serializeProfile(profile, c.env) : null }, 201);
 });
 
 app.patch("/api/admin/profile", authRequired, async (c) => {
@@ -505,8 +519,11 @@ app.patch("/api/admin/profile", authRequired, async (c) => {
     slug: cleanSlug(body?.slug ?? existing.slug),
     title: sanitizeText(body?.title ?? existing.title),
     description: sanitizeText(body?.description ?? existing.description ?? ""),
-    avatar: sanitizeAssetUrl(body?.avatar ?? existing.avatar ?? "/assets/crest.svg", existing.avatar || "/assets/crest.svg"),
-    banner: sanitizeAssetUrl(
+    avatar: canonicalAssetReference(
+      body?.avatar ?? existing.avatar ?? "/assets/crest.svg",
+      existing.avatar || "/assets/crest.svg"
+    ),
+    banner: canonicalAssetReference(
       body?.banner ?? existing.banner ?? "/assets/institutional-banner.svg",
       existing.banner || "/assets/institutional-banner.svg"
     ),
@@ -543,7 +560,7 @@ app.patch("/api/admin/profile", authRequired, async (c) => {
 
   const profile = await getProfileById(c.env.DB, existing.id);
   await logAudit(c.env.DB, user, "profile.updated", "profile", existing.id, existing.id, next);
-  return c.json({ profile: profile ? serializeProfile(profile) : null });
+  return c.json({ profile: profile ? serializeProfile(profile, c.env) : null });
 });
 
 app.post("/api/admin/uploads", authRequired, async (c) => {
@@ -604,7 +621,7 @@ app.post("/api/admin/uploads", authRequired, async (c) => {
     }
   });
 
-  const url = assetUrl(c.env, key);
+  const storedUrl = internalAssetPath(key);
   await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT INTO uploads (id, profile_id, uploaded_by, kind, r2_key, url, content_type, size_bytes, width, height)
@@ -615,14 +632,14 @@ app.post("/api/admin/uploads", authRequired, async (c) => {
       user.id,
       kind,
       key,
-      url,
+      storedUrl,
       contentType,
       buffer.byteLength,
       dimensions.width,
       dimensions.height
     ),
     c.env.DB.prepare(`UPDATE profiles SET ${kind === "avatar" ? "avatar" : "banner"} = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(
-      url,
+      storedUrl,
       profile.id
     )
   ]);
@@ -635,12 +652,12 @@ app.post("/api/admin/uploads", authRequired, async (c) => {
 
   const updatedProfile = await getProfileById(c.env.DB, profile.id);
   return c.json({
-    url,
+    url: resolveAssetReference(storedUrl, c.env, storedUrl),
     key,
     width: dimensions.width,
     height: dimensions.height,
     size: buffer.byteLength,
-    profile: updatedProfile ? serializeProfile(updatedProfile) : null
+    profile: updatedProfile ? serializeProfile(updatedProfile, c.env) : null
   });
 });
 
@@ -802,7 +819,198 @@ app.get("/api/admin/users", authRequired, async (c) => {
      ORDER BY p.title, pp.role`
   ).all();
 
-  return c.json({ users: rows.results.map(serializeUser), permissions: permissions.results });
+  return c.json({ users: rows.results.map((item) => serializeUser(item, c.env)), permissions: permissions.results });
+});
+
+app.get("/api/admin/access-requests", authRequired, async (c) => {
+  const user = c.get("user");
+  if (!canManageUsers(toPolicyUser(user))) {
+    return c.json({ error: "Acesso restrito a administradores." }, 403);
+  }
+
+  const rows = await c.env.DB.prepare(
+    `SELECT id, display_name, institutional_email, status, attempts_count, requested_at, last_attempt_at
+     FROM sim_access_requests
+     WHERE status = 'pending'
+     ORDER BY last_attempt_at DESC
+     LIMIT 100`
+  ).all<SimAccessRequestRow>();
+
+  return c.json({ requests: rows.results.map(serializeSimAccessRequest) });
+});
+
+app.post("/api/admin/access-requests/:id/approve", authRequired, async (c) => {
+  const actor = c.get("user");
+  if (!canManageUsers(toPolicyUser(actor))) {
+    return c.json({ error: "Acesso restrito a administradores." }, 403);
+  }
+
+  const requestId = sanitizeText(c.req.param("id"), 80);
+  const body = await c.req.json().catch(() => null);
+  const role = sanitizeText(body?.role || "EDITOR").toUpperCase() as UserRole;
+  const profileId = sanitizeText(body?.profileId || "", 80);
+  const requestedLinkIds: string[] = Array.isArray(body?.linkIds)
+    ? [...new Set<string>(body.linkIds.map((linkId: unknown) => sanitizeText(linkId, 80)).filter((linkId: string) => Boolean(linkId)))]
+    : [];
+
+  if (!requestId || !["ADMIN", "GESTOR", "EDITOR"].includes(role)) {
+    return c.json({ error: "Dados de aprovacao invalidos." }, 400);
+  }
+  if (role !== "ADMIN" && !profileId) {
+    return c.json({ error: "Selecione a pagina que este usuario podera administrar." }, 400);
+  }
+
+  const accessRequest = await getSimAccessRequest(c.env.DB, requestId);
+  if (!accessRequest) {
+    return c.json({ error: "Solicitacao de acesso nao encontrada." }, 404);
+  }
+  if (accessRequest.status !== "pending") {
+    return c.json({ error: "Esta solicitacao ja foi revisada." }, 409);
+  }
+
+  let validLinkIds: string[] = [];
+  if (role !== "ADMIN") {
+    const profile = await getProfileById(c.env.DB, profileId);
+    if (!profile) {
+      return c.json({ error: "Pagina autorizada nao encontrada." }, 404);
+    }
+    if (role === "EDITOR") {
+      const links = await getLinks(c.env.DB, profileId);
+      const allowedIds = new Set(links.map((link) => link.id));
+      validLinkIds = requestedLinkIds.filter((linkId) => allowedIds.has(linkId));
+      if (validLinkIds.length !== requestedLinkIds.length) {
+        return c.json({ error: "Um ou mais links autorizados nao pertencem a pagina selecionada." }, 400);
+      }
+    }
+  }
+
+  const rawEmail = body?.email === undefined ? "" : sanitizeText(body.email, 254);
+  const suppliedEmail = normalizeEmail(rawEmail);
+  if (rawEmail && !suppliedEmail) {
+    return c.json({ error: "Informe um e-mail institucional valido ou deixe o campo vazio." }, 400);
+  }
+  const rawUsername = body?.username === undefined ? "" : sanitizeText(body.username, 80);
+  const suppliedUsername = cleanSlug(rawUsername);
+  if (rawUsername && !suppliedUsername) {
+    return c.json({ error: "Informe um nome de usuario valido ou deixe o campo vazio." }, 400);
+  }
+
+  const opaqueSuffix = requestId.replace(/[^A-Za-z0-9]/g, "").slice(0, 12).toLowerCase();
+  const username = suppliedUsername || `sim-${opaqueSuffix}`;
+  const email = suppliedEmail || normalizeEmail(accessRequest.institutional_email) || `${username}@identity.invalid`;
+  const conflict = await c.env.DB.prepare(
+    "SELECT id FROM users WHERE email = ? OR username = ? OR external_subject = ? LIMIT 1"
+  )
+    .bind(email, username, accessRequest.external_subject)
+    .first<{ id: string }>();
+  if (conflict) {
+    return c.json({ error: "A identidade, o e-mail ou o usuario ja esta vinculado a outro cadastro." }, 409);
+  }
+
+  const userId = crypto.randomUUID();
+  const statements = [
+    c.env.DB.prepare(
+      `INSERT INTO users (id, name, email, password_hash, username, role, avatar, description, active, status, external_subject)
+       SELECT ?, display_name, ?, 'SIM_IDENTITY_ONLY', ?, ?, '/assets/crest.svg', ?, 1, 'active', external_subject
+       FROM sim_access_requests
+       WHERE id = ? AND status = 'pending'`
+    ).bind(
+      userId,
+      email,
+      username,
+      role,
+      "Acesso institucional aprovado por administrador.",
+      requestId
+    )
+  ];
+
+  if (role !== "ADMIN") {
+    statements.push(
+      c.env.DB.prepare(
+        `INSERT INTO page_permissions (id, user_id, profile_id, role, status, approved_by)
+         VALUES (?, ?, ?, ?, 'approved', ?)`
+      ).bind(crypto.randomUUID(), userId, profileId, role, actor.id)
+    );
+  }
+  if (role === "EDITOR") {
+    statements.push(
+      ...validLinkIds.map((linkId) =>
+        c.env.DB.prepare(
+          `INSERT INTO editor_link_permissions (id, user_id, profile_id, link_id, granted_by)
+           VALUES (?, ?, ?, ?, ?)`
+        ).bind(crypto.randomUUID(), userId, profileId, linkId, actor.id)
+      )
+    );
+  }
+  statements.push(
+    c.env.DB.prepare(
+      `UPDATE sim_access_requests
+       SET status = 'approved', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP,
+           resolution_role = ?, profile_id = ?, created_user_id = ?
+       WHERE id = ? AND status = 'pending'`
+    ).bind(actor.id, role, role === "ADMIN" ? null : profileId, userId, requestId)
+  );
+
+  let results: D1Result<unknown>[];
+  try {
+    results = await c.env.DB.batch(statements);
+  } catch (error) {
+    const latest = await getSimAccessRequest(c.env.DB, requestId).catch(() => null);
+    if (latest && latest.status !== "pending") {
+      return c.json({ error: "Esta solicitacao foi revisada por outra sessao." }, 409);
+    }
+    throw error;
+  }
+  const inserted = Number((results[0] as { meta?: { changes?: number } })?.meta?.changes || 0);
+  if (!inserted) {
+    return c.json({ error: "Esta solicitacao foi revisada por outra sessao." }, 409);
+  }
+
+  await logAudit(c.env.DB, actor, "sim_access.approved", "sim_access_request", requestId, role === "ADMIN" ? null : profileId, {
+    role,
+    linkCount: validLinkIds.length,
+    generatedEmail: !suppliedEmail && !accessRequest.institutional_email,
+    generatedUsername: !suppliedUsername
+  });
+
+  const created = await getUserById(c.env.DB, userId);
+  if (!created) {
+    throw new Error("Approved SIM user was not found after persistence.");
+  }
+  return c.json({ user: serializeUser(created, c.env) });
+});
+
+app.post("/api/admin/access-requests/:id/reject", authRequired, async (c) => {
+  const actor = c.get("user");
+  if (!canManageUsers(toPolicyUser(actor))) {
+    return c.json({ error: "Acesso restrito a administradores." }, 403);
+  }
+
+  const requestId = sanitizeText(c.req.param("id"), 80);
+  const accessRequest = await getSimAccessRequest(c.env.DB, requestId);
+  if (!accessRequest) {
+    return c.json({ error: "Solicitacao de acesso nao encontrada." }, 404);
+  }
+  if (accessRequest.status !== "pending") {
+    return c.json({ error: "Esta solicitacao ja foi revisada." }, 409);
+  }
+
+  const result = await c.env.DB.prepare(
+    `UPDATE sim_access_requests
+     SET status = 'rejected', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP,
+         resolution_role = NULL, profile_id = NULL, created_user_id = NULL
+     WHERE id = ? AND status = 'pending'`
+  )
+    .bind(actor.id, requestId)
+    .run();
+  if (!Number(result.meta?.changes || 0)) {
+    return c.json({ error: "Esta solicitacao foi revisada por outra sessao." }, 409);
+  }
+  await logAudit(c.env.DB, actor, "sim_access.rejected", "sim_access_request", requestId, null, {
+    provider: "sim"
+  });
+
+  return c.json({ ok: true });
 });
 
 app.post("/api/admin/users", authRequired, async (c) => {
@@ -871,7 +1079,7 @@ app.post("/api/admin/users", authRequired, async (c) => {
   });
 
   const created = await getUserById(c.env.DB, id);
-  return c.json({ user: created ? serializeUser(created) : null }, 201);
+  return c.json({ user: created ? serializeUser(created, c.env) : null }, 201);
 });
 
 app.patch("/api/admin/users/:id", authRequired, async (c) => {
@@ -928,7 +1136,7 @@ app.patch("/api/admin/users/:id", authRequired, async (c) => {
   });
 
   const updated = await getUserById(c.env.DB, id);
-  return c.json({ user: updated ? serializeUser(updated) : null });
+  return c.json({ user: updated ? serializeUser(updated, c.env) : null });
 });
 
 app.delete("/api/admin/users/:id", authRequired, async (c) => {
@@ -1152,17 +1360,37 @@ async function loginWithSim(c: Context<AppEnv>, identifier: string, password: st
     const user = await c.env.DB.prepare(
       `SELECT id, name, email, username, role, avatar, description, status, active, external_subject
        FROM users
-       WHERE external_subject = ? AND active = 1 AND COALESCE(status, 'active') = 'active'
+       WHERE external_subject = ?
        LIMIT 1`
     )
       .bind(authenticated.identity.subject)
       .first<SessionUser>();
 
     if (!user) {
+      const accessRequest = await recordSimAccessRequest(c.env.DB, authenticated.identity);
+      if (accessRequest.status === "rejected") {
+        return c.json(
+          {
+            error: "Esta solicitacao de acesso foi recusada por um administrador.",
+            code: "access_rejected"
+          },
+          403
+        );
+      }
       return c.json(
         {
-          error:
-            "A identidade foi validada pelo SIM, mas ainda nao possui permissao no LinkGov. Solicite o cadastro a um administrador."
+          error: "Identidade validada. A solicitacao foi enviada ao administrador para aprovacao.",
+          code: "access_pending"
+        },
+        403
+      );
+    }
+
+    if (!user.active || normalizeStatus(user.status) !== "active") {
+      return c.json(
+        {
+          error: "Este cadastro esta inativo ou suspenso. Procure um administrador.",
+          code: "access_disabled"
         },
         403
       );
@@ -1190,7 +1418,7 @@ async function loginWithSim(c: Context<AppEnv>, identifier: string, password: st
 
     return c.json({
       expiresAt,
-      user: serializeUser(user)
+      user: serializeUser(user, c.env)
     });
   } finally {
     if (!sessionPersisted) {
@@ -1371,7 +1599,7 @@ async function publicProfileResponse(c: Context<AppEnv>, profile: ProfileRow | n
   }
 
   const links = await getLinks(c.env.DB, profile.id, { onlyActive: true });
-  return c.json({ profile: serializeProfile(profile), links: links.map(serializeLink) });
+  return c.json({ profile: serializeProfile(profile, c.env), links: links.map(serializeLink) });
 }
 
 async function uniqueProfileSlug(db: D1Database, value: unknown) {
@@ -1446,6 +1674,77 @@ async function getUserById(db: D1Database, userId: string) {
     .first<UserRow>();
 }
 
+async function getSimAccessRequest(db: D1Database, requestId: string) {
+  return db
+    .prepare(
+      `SELECT id, external_subject, display_name, institutional_email, status, attempts_count,
+              requested_at, last_attempt_at, reviewed_at
+       FROM sim_access_requests
+       WHERE id = ?
+       LIMIT 1`
+    )
+    .bind(requestId)
+    .first<SimAccessRequestRow>();
+}
+
+async function recordSimAccessRequest(db: D1Database, identity: SimIdentity) {
+  const requestId = crypto.randomUUID();
+  const displayName = sanitizeText(identity.displayName || "Usuario SIM", 160) || "Usuario SIM";
+  const institutionalEmail = normalizeEmail(identity.institutionalEmail) || null;
+
+  await db
+    .prepare(
+      `INSERT INTO sim_access_requests
+         (id, external_subject, display_name, institutional_email, status, attempts_count, requested_at, last_attempt_at)
+       VALUES (?, ?, ?, ?, 'pending', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT(external_subject) DO UPDATE SET
+         display_name = CASE
+           WHEN excluded.display_name = 'Usuario SIM' THEN sim_access_requests.display_name
+           ELSE excluded.display_name
+         END,
+         institutional_email = COALESCE(excluded.institutional_email, sim_access_requests.institutional_email),
+         status = CASE
+           WHEN sim_access_requests.status = 'approved' AND sim_access_requests.created_user_id IS NULL THEN 'pending'
+           ELSE sim_access_requests.status
+         END,
+         reviewed_by = CASE
+           WHEN sim_access_requests.status = 'approved' AND sim_access_requests.created_user_id IS NULL THEN NULL
+           ELSE sim_access_requests.reviewed_by
+         END,
+         reviewed_at = CASE
+           WHEN sim_access_requests.status = 'approved' AND sim_access_requests.created_user_id IS NULL THEN NULL
+           ELSE sim_access_requests.reviewed_at
+         END,
+         resolution_role = CASE
+           WHEN sim_access_requests.status = 'approved' AND sim_access_requests.created_user_id IS NULL THEN NULL
+           ELSE sim_access_requests.resolution_role
+         END,
+         profile_id = CASE
+           WHEN sim_access_requests.status = 'approved' AND sim_access_requests.created_user_id IS NULL THEN NULL
+           ELSE sim_access_requests.profile_id
+         END,
+         attempts_count = sim_access_requests.attempts_count + 1,
+         last_attempt_at = CURRENT_TIMESTAMP`
+    )
+    .bind(requestId, identity.subject, displayName, institutionalEmail)
+    .run();
+
+  const stored = await db
+    .prepare(
+      `SELECT id, external_subject, display_name, institutional_email, status, attempts_count,
+              requested_at, last_attempt_at, reviewed_at
+       FROM sim_access_requests
+       WHERE external_subject = ?
+       LIMIT 1`
+    )
+    .bind(identity.subject)
+    .first<SimAccessRequestRow>();
+  if (!stored) {
+    throw new Error("SIM access request was not persisted.");
+  }
+  return stored;
+}
+
 async function grantUserProfilePermission(
   db: D1Database,
   actor: UserRow,
@@ -1500,29 +1799,41 @@ async function grantUserProfilePermission(
   }
 }
 
-function serializeUser(row: UserRow) {
+function serializeUser(row: UserRow, env: Pick<Bindings, "ASSET_BASE_URL">) {
   return {
     id: row.id,
     name: row.name,
     email: row.email,
     username: row.username,
     role: row.role,
-    avatar: row.avatar,
+    avatar: row.avatar ? resolveAssetReference(row.avatar, env, row.avatar) : row.avatar,
     description: row.description,
     status: normalizeStatus(row.status),
     active: Boolean(row.active)
   };
 }
 
-function serializeProfile(row: ProfileRow) {
+function serializeSimAccessRequest(row: SimAccessRequestRow) {
+  return {
+    id: row.id,
+    displayName: row.display_name,
+    institutionalEmail: row.institutional_email,
+    status: row.status,
+    attemptsCount: Number(row.attempts_count || 1),
+    requestedAt: timestampValue(row.requested_at),
+    lastAttemptAt: timestampValue(row.last_attempt_at)
+  };
+}
+
+function serializeProfile(row: ProfileRow, env: Pick<Bindings, "ASSET_BASE_URL">) {
   return {
     id: row.id,
     userId: row.user_id,
     slug: row.slug,
     title: row.title,
     description: row.description || "",
-    avatar: row.avatar || "/assets/crest.svg",
-    banner: row.banner || "/assets/institutional-banner.svg",
+    avatar: resolveAssetReference(row.avatar, env, "/assets/crest.svg"),
+    banner: resolveAssetReference(row.banner, env, "/assets/institutional-banner.svg"),
     primaryColor: row.primary_color,
     secondaryColor: row.secondary_color,
     theme: row.theme,
@@ -1800,6 +2111,19 @@ function sanitizeExternalSubject(value: unknown) {
   return /^[A-Za-z0-9._:@-]{1,160}$/.test(subject) ? subject : "";
 }
 
+function normalizeEmail(value: unknown) {
+  const email = sanitizeText(value, 254).toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : "";
+}
+
+function timestampValue(value: unknown) {
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    return value.toISOString();
+  }
+  const date = new Date(String(value || ""));
+  return Number.isFinite(date.getTime()) ? date.toISOString() : "";
+}
+
 function cleanSlug(value: unknown) {
   return sanitizeText(value)
     .toLowerCase()
@@ -1824,10 +2148,17 @@ function normalizeUrl(value: unknown) {
   }
 }
 
-function sanitizeAssetUrl(value: unknown, fallback: string) {
+export function canonicalAssetReference(value: unknown, fallback: string) {
   const text = sanitizeText(value);
-  if (text.startsWith("/assets/") || text.startsWith("/api/assets/")) {
+  if (text.startsWith("/assets/")) {
     return text;
+  }
+  const internalPath = internalAssetPathFromUrl(text);
+  if (internalPath) {
+    return internalPath;
+  }
+  if (looksLikeInternalAssetUrl(text)) {
+    return fallback;
   }
   return normalizeUrl(text) || fallback;
 }
@@ -1959,9 +2290,59 @@ function extensionForContentType(contentType: string) {
   return "jpg";
 }
 
-function assetUrl(env: Bindings, key: string) {
+function assetUrl(env: Pick<Bindings, "ASSET_BASE_URL">, key: string) {
   const base = sanitizeText(env.ASSET_BASE_URL || "");
   return base ? `${base.replace(/\/$/, "")}/${key}` : `/api/assets/${key}`;
+}
+
+function internalAssetPath(key: string) {
+  return `/api/assets/${key}`;
+}
+
+function internalAssetPathFromUrl(value: string) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const match = value.match(/^(?:https?:\/\/[^/?#]+)?(\/api\/assets\/[^?#]+)(?:[?#].*)?$/i);
+    if (!match) {
+      return null;
+    }
+
+    if (!value.startsWith("/")) {
+      new URL(value);
+    }
+
+    const encodedKey = match[1].slice("/api/assets/".length);
+    const decodedKey = decodeURIComponent(encodedKey);
+    if (
+      !decodedKey ||
+      decodedKey.includes("\\") ||
+      decodedKey.split("/").some((part) => !part || part === "." || part === "..")
+    ) {
+      return null;
+    }
+    return internalAssetPath(encodedKey);
+  } catch {
+    return null;
+  }
+}
+
+function looksLikeInternalAssetUrl(value: string) {
+  return /^(?:https?:\/\/[^/?#]+)?\/api\/assets(?:\/|[?#]|$)/i.test(value);
+}
+
+export function resolveAssetReference(
+  value: unknown,
+  env: Pick<Bindings, "ASSET_BASE_URL">,
+  fallback: string
+) {
+  const reference = canonicalAssetReference(value, fallback);
+  if (!reference.startsWith("/api/assets/")) {
+    return reference;
+  }
+  return assetUrl(env, reference.slice("/api/assets/".length));
 }
 
 function escapeHtml(value: string) {

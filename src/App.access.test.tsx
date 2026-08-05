@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
   getInstitutionalSession: vi.fn(),
-  getAdminState: vi.fn()
+  getAdminState: vi.fn(),
+  getSimAccessRequests: vi.fn()
 }));
 
 vi.mock("./config/runtime", async () => {
@@ -24,7 +25,8 @@ vi.mock("./services/api", async () => {
   return {
     ...actual,
     getInstitutionalSession: apiMocks.getInstitutionalSession,
-    getAdminState: apiMocks.getAdminState
+    getAdminState: apiMocks.getAdminState,
+    getSimAccessRequests: apiMocks.getSimAccessRequests
   };
 });
 
@@ -40,6 +42,7 @@ describe("Cloudflare Access application flow", () => {
     Object.defineProperty(window.navigator, "onLine", { configurable: true, value: true });
     apiMocks.getInstitutionalSession.mockReset().mockResolvedValue({ user: seedState.user, provider: "access" });
     apiMocks.getAdminState.mockReset().mockResolvedValue(seedState);
+    apiMocks.getSimAccessRequests.mockReset().mockResolvedValue([]);
   });
 
   it("loads the admin panel without requiring a local bearer token", async () => {

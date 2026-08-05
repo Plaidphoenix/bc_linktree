@@ -1,5 +1,6 @@
 export type Role = "ADMIN" | "GESTOR" | "EDITOR";
 export type UserStatus = "active" | "inactive" | "suspended";
+export type SimAccessRequestStatus = "pending" | "approved" | "rejected";
 
 export type User = {
   id: string;
@@ -11,6 +12,16 @@ export type User = {
   description?: string | null;
   status?: UserStatus;
   active: boolean;
+};
+
+export type SimAccessRequest = {
+  id: string;
+  displayName: string;
+  institutionalEmail?: string | null;
+  status: SimAccessRequestStatus;
+  attemptsCount: number;
+  requestedAt: string;
+  lastAttemptAt: string;
 };
 
 export type PublicProfile = {

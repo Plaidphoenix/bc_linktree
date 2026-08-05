@@ -7,9 +7,19 @@ import {
   seedUsers
 } from "../data/seed";
 import { runtimeConfig, usesManagedSession } from "../config/runtime";
-import type { AdminPermissions, AdminState, Analytics, LinkItem, PublicProfile, User, UserStatus } from "../types";
+import type {
+  AdminPermissions,
+  AdminState,
+  Analytics,
+  LinkItem,
+  PublicProfile,
+  SimAccessRequest,
+  User,
+  UserStatus
+} from "../types";
 import { createId } from "../utils/id";
 import { accessSessionStore } from "./access-session";
+import { publicProfileCache, type PublicProfilePayload } from "./public-profile-cache";
 
 const API_BASE = runtimeConfig.apiBaseUrl;
 const TOKEN_KEY = "linkgov.session";
@@ -31,8 +41,9 @@ type StoredLocalState = {
 };
 
 export class ApiError extends Error {
-  constructor(message: string, public status = 500) {
+  constructor(message: string, public status = 500, public code?: string) {
     super(message);
+    this.name = "ApiError";
   }
 }
 
@@ -137,12 +148,39 @@ export async function resetPassword(token: string, password: string) {
   });
 }
 
-export async function getPublicProfile(slug?: string) {
+export type PublicProfileResult = PublicProfilePayload & {
+  source: "network" | "cache" | "demo";
+  cachedAt?: string;
+};
+
+export async function getPublicProfile(slug?: string): Promise<PublicProfileResult> {
   const normalizedSlug = cleanSlug(slug || "");
   try {
     const path = normalizedSlug ? `/api/profiles/${normalizedSlug}` : "/api/profiles";
-    return await request<{ profile: PublicProfile; links: LinkItem[] }>(path);
+    const result = await requestWithMetadata<PublicProfilePayload>(path);
+    const payload = result.data;
+    if (result.offlineCache) {
+      return {
+        ...payload,
+        source: "cache",
+        cachedAt: result.cachedAt || new Date().toISOString()
+      };
+    }
+    publicProfileCache.save(normalizedSlug, payload);
+    return { ...payload, source: "network" };
   } catch (error) {
+    if (!runtimeConfig.demoFallbackEnabled && isTemporaryApiFailure(error)) {
+      const cached = publicProfileCache.get(normalizedSlug);
+      if (cached) {
+        return {
+          profile: cached.profile,
+          links: cached.links,
+          source: "cache",
+          cachedAt: cached.savedAt
+        };
+      }
+    }
+
     ensureDemoFallbackAllowed(error);
     const stored = readStoredLocalState();
     const profile = normalizedSlug
@@ -153,7 +191,8 @@ export async function getPublicProfile(slug?: string) {
     }
     return {
       profile,
-      links: stored.links.filter((link) => link.profileId === profile.id && link.active).sort((a, b) => a.order - b.order)
+      links: stored.links.filter((link) => link.profileId === profile.id && link.active).sort((a, b) => a.order - b.order),
+      source: "demo"
     };
   }
 }
@@ -338,6 +377,34 @@ export async function getUsers(): Promise<User[]> {
   }
 }
 
+export async function getSimAccessRequests(): Promise<SimAccessRequest[]> {
+  const response = await request<{ requests: SimAccessRequest[] }>("/api/admin/access-requests");
+  return response.requests;
+}
+
+export async function approveSimAccessRequest(
+  id: string,
+  payload: {
+    role: User["role"];
+    profileId?: string;
+    linkIds?: string[];
+    email?: string;
+    username?: string;
+  }
+): Promise<User> {
+  const response = await request<{ user: User }>(`/api/admin/access-requests/${encodeURIComponent(id)}/approve`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  return response.user;
+}
+
+export async function rejectSimAccessRequest(id: string) {
+  return request<{ ok: boolean }>(`/api/admin/access-requests/${encodeURIComponent(id)}/reject`, {
+    method: "POST"
+  });
+}
+
 export async function createUser(payload: {
   name: string;
   email: string;
@@ -449,6 +516,10 @@ export async function trackView(profileId: string, viewId: string) {
 }
 
 async function request<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
+  return (await requestWithMetadata<T>(path, init)).data;
+}
+
+async function requestWithMetadata<T = unknown>(path: string, init: RequestInit = {}) {
   const token = sessionStore.getToken();
   const headers = new Headers(init.headers);
   if (!(init.body instanceof FormData) && !headers.has("Content-Type")) {
@@ -475,11 +546,19 @@ async function request<T = unknown>(path: string, init: RequestInit = {}): Promi
   }
 
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
-    throw new ApiError(body?.error || body?.message || "Falha na comunicacao com a API.", response.status);
+    const body = (await response.json().catch(() => null)) as { error?: string; message?: string; code?: string } | null;
+    throw new ApiError(
+      body?.error || body?.message || "Falha na comunicacao com a API.",
+      response.status,
+      body?.code
+    );
   }
 
-  return response.json() as Promise<T>;
+  return {
+    data: (await response.json()) as T,
+    offlineCache: response.headers.get("X-LinkGov-Offline") === "true",
+    cachedAt: response.headers.get("X-LinkGov-Cached-At") || undefined
+  };
 }
 
 function ensureDemoFallbackAllowed(error: unknown) {
@@ -492,6 +571,10 @@ function ensureDemoFallbackAllowed(error: unknown) {
   }
 
   throw new ApiError("Nao foi possivel conectar a API remota. Tente novamente em alguns instantes.", 0);
+}
+
+function isTemporaryApiFailure(error: unknown) {
+  return error instanceof ApiError && (error.status === 0 || error.status >= 500);
 }
 
 function readStoredLocalState(): StoredLocalState {

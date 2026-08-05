@@ -5,7 +5,10 @@ const apiMocks = vi.hoisted(() => ({
   login: vi.fn(),
   getInstitutionalSession: vi.fn(),
   getAdminState: vi.fn(),
-  getUsers: vi.fn()
+  getUsers: vi.fn(),
+  getSimAccessRequests: vi.fn(),
+  approveSimAccessRequest: vi.fn(),
+  rejectSimAccessRequest: vi.fn()
 }));
 
 vi.mock("./config/runtime", async () => {
@@ -28,7 +31,10 @@ vi.mock("./services/api", async () => {
     login: apiMocks.login,
     getInstitutionalSession: apiMocks.getInstitutionalSession,
     getAdminState: apiMocks.getAdminState,
-    getUsers: apiMocks.getUsers
+    getUsers: apiMocks.getUsers,
+    getSimAccessRequests: apiMocks.getSimAccessRequests,
+    approveSimAccessRequest: apiMocks.approveSimAccessRequest,
+    rejectSimAccessRequest: apiMocks.rejectSimAccessRequest
   };
 });
 
@@ -51,6 +57,14 @@ describe("SIM application flow", () => {
     });
     apiMocks.getAdminState.mockReset().mockResolvedValue(seedState);
     apiMocks.getUsers.mockReset().mockResolvedValue(seedUsers);
+    apiMocks.getSimAccessRequests.mockReset().mockResolvedValue([]);
+    apiMocks.approveSimAccessRequest.mockReset().mockResolvedValue({
+      ...seedUsers[1],
+      id: "usr-approved",
+      name: "Pessoa Sintetica",
+      role: "EDITOR"
+    });
+    apiMocks.rejectSimAccessRequest.mockReset().mockResolvedValue({ ok: true });
   });
 
   it("uses the municipal identity form without exposing a bearer token in localStorage", async () => {
@@ -93,5 +107,65 @@ describe("SIM application flow", () => {
 
     expect(screen.getByLabelText(/identificador interno sim/i)).toBeRequired();
     expect(screen.getByText(/cpf e jwt nao devem ser informados/i)).toBeInTheDocument();
+  });
+
+  it("notifies the admin and approves a SIM identity for selected links", async () => {
+    const request = {
+      id: "req-synthetic",
+      displayName: "Pessoa Sintetica",
+      institutionalEmail: "pessoa@example.test",
+      status: "pending" as const,
+      attemptsCount: 2,
+      requestedAt: "2026-08-04T12:00:00.000Z",
+      lastAttemptAt: "2026-08-04T12:05:00.000Z"
+    };
+    apiMocks.getSimAccessRequests.mockResolvedValue([request]);
+    window.history.pushState({}, "", "/admin/links");
+
+    render(<App />);
+
+    const notifications = await screen.findByRole("button", { name: /notificacoes: 1 solicitacoes pendentes/i });
+    fireEvent.click(notifications);
+    fireEvent.click(await screen.findByRole("button", { name: /pessoa sintetica/i }));
+
+    expect(screen.getByRole("dialog", { name: /revisar acesso/i })).toBeInTheDocument();
+    const allowedLink = seedState.links[0];
+    fireEvent.click(screen.getByRole("checkbox", { name: allowedLink.title }));
+    fireEvent.click(screen.getByRole("button", { name: /^aprovar acesso$/i }));
+
+    await waitFor(() =>
+      expect(apiMocks.approveSimAccessRequest).toHaveBeenCalledWith("req-synthetic", {
+        role: "EDITOR",
+        profileId: seedState.profile.id,
+        linkIds: [allowedLink.id],
+        email: "pessoa@example.test"
+      })
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /revisar acesso/i })).not.toBeInTheDocument());
+  });
+
+  it("requires confirmation before rejecting a SIM access request", async () => {
+    apiMocks.getSimAccessRequests.mockResolvedValue([
+      {
+        id: "req-reject-synthetic",
+        displayName: "Pessoa para Recusa",
+        institutionalEmail: null,
+        status: "pending",
+        attemptsCount: 1,
+        requestedAt: "2026-08-04T12:00:00.000Z",
+        lastAttemptAt: "2026-08-04T12:00:00.000Z"
+      }
+    ]);
+    window.history.pushState({}, "", "/admin/links");
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /notificacoes: 1 solicitacoes pendentes/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /pessoa para recusa/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^recusar acesso$/i }));
+
+    expect(apiMocks.rejectSimAccessRequest).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /confirmar recusa/i }));
+    await waitFor(() => expect(apiMocks.rejectSimAccessRequest).toHaveBeenCalledWith("req-reject-synthetic"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /revisar acesso/i })).not.toBeInTheDocument());
   });
 });

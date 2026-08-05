@@ -23,7 +23,7 @@ function syntheticToken(payload: Record<string, unknown> = { ref_cod_usuario: 12
 }
 
 describe("SIM identity adapter", () => {
-  it("logs in, validates the returned token and extracts only the configured subject", async () => {
+  it("logs in, validates the returned token and extracts only safe identity claims", async () => {
     const token = syntheticToken();
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -42,7 +42,7 @@ describe("SIM identity adapter", () => {
 
     const result = await authenticateSimCredentials(env, "usuario.teste", "senha-sintetica", fetchMock);
 
-    expect(result.identity).toEqual({ subject: "123" });
+    expect(result.identity).toEqual({ subject: "123", displayName: "Usuario Sintetico" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       user: "usuario.teste",
@@ -104,6 +104,22 @@ describe("SIM identity adapter", () => {
     const token = syntheticToken({ nome: "Sem identificador" });
 
     expect(() => extractSimIdentity(env, token)).toThrow(SimAuthError);
+  });
+
+  it("never exposes CPF or provider session claims in the extracted identity", () => {
+    const token = syntheticToken({
+      ref_cod_usuario: 123,
+      nome: "Usuario <Sintetico>",
+      email: "USUARIO.SINTETICO@EXAMPLE.TEST",
+      cpf: "000.000.000-00",
+      token: "provider-session-value"
+    });
+
+    expect(extractSimIdentity(env, token)).toEqual({
+      subject: "123",
+      displayName: "Usuario Sintetico",
+      institutionalEmail: "usuario.sintetico@example.test"
+    });
   });
 
   it("encrypts provider tokens before persistence", async () => {

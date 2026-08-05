@@ -105,6 +105,29 @@ Antes do deploy, a equipe responsavel pelo SIM ainda precisa confirmar:
 5. Procedimento de rotacao da chave de assinatura.
 6. Contato operacional para indisponibilidade e incidente de seguranca.
 
+## Fila de autorizacao de identidades SIM
+
+Uma identidade validada pelo SIM que ainda nao existe em `users` nao e criada
+automaticamente. A API registra uma solicitacao idempotente em
+`sim_access_requests`, encerra o JWT no SIM e responde `403` com o codigo
+`access_pending`. O registro guarda somente o identificador interno, nome seguro,
+e-mail institucional quando fornecido pelo SIM, estado e datas. Senha, CPF e JWT
+nao sao persistidos nessa fila.
+
+Administradores consultam `GET /api/admin/access-requests` pelo sino do painel e
+podem:
+
+- aprovar em `POST /api/admin/access-requests/:id/approve`, escolhendo
+  `ADMIN`, `GESTOR` ou `EDITOR`;
+- limitar gestor/editor a pagina selecionada;
+- limitar editor aos links escolhidos;
+- recusar em `POST /api/admin/access-requests/:id/reject`.
+
+Uma recusa permanece bloqueada em novas tentativas. Usuario inativo ou suspenso
+tambem permanece bloqueado e nao abre outra solicitacao. Aprovacao e recusa geram
+eventos em `audit_logs`, sem incluir o identificador SIM ou dados pessoais nos
+metadados.
+
 ## Arquivos adicionados
 
 - `server/index.ts`: processo Node/Hono.
@@ -118,6 +141,7 @@ Antes do deploy, a equipe responsavel pelo SIM ainda precisa confirmar:
   pela identidade validada no SIM.
 - `worker/sim-auth.ts`: login, validacao, logout e cifra de token SIM.
 - `migrations/postgres/0001_linkgov_schema.sql`: schema sem dados seed.
+- `migrations/postgres/0003_sim_access_requests.sql`: fila auditavel de acesso SIM.
 - `.env.municipal.example`: nomes das variaveis, sem valores reais.
 
 ## 1. Limpeza local das capturas
@@ -437,7 +461,8 @@ Usar contas e paginas sinteticas aprovadas pela prefeitura:
    `SameSite=Lax`.
 3. O JSON de login nao contem `jwt` nem `token`.
 4. `localStorage` nao contem Bearer token.
-5. Identidade SIM sem cadastro LinkGov recebe `403`.
+5. Identidade SIM sem cadastro LinkGov recebe `403` e aparece como solicitacao
+   pendente para o administrador.
 6. Admin cria pagina, gestor e editor sinteticos.
 7. Gestor acessa apenas uma pagina.
 8. Editor altera apenas links autorizados.

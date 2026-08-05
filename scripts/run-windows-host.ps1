@@ -8,6 +8,7 @@ param(
   [string]$PublicBaseUrl = "",
   [string]$PfxFile = "",
   [string]$PfxPassphraseFile = "",
+  [switch]$BehindNginx,
   [switch]$SkipBuild
 )
 
@@ -75,7 +76,13 @@ if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
 }
 
 $activeAddress = Get-ActiveIpv4
-if (-not $PublicBaseUrl) {
+if ($BehindNginx -and $PublicBaseUrl) {
+  throw "Use BehindNginx ou PublicBaseUrl, nunca os dois juntos."
+}
+if ($BehindNginx) {
+  $PublicBaseUrl = "https://${activeAddress}"
+}
+elseif (-not $PublicBaseUrl) {
   $PublicBaseUrl = "https://${activeAddress}:$Port"
 }
 $publicUri = $null
@@ -83,14 +90,14 @@ if (-not [Uri]::TryCreate($PublicBaseUrl, [UriKind]::Absolute, [ref]$publicUri) 
     $publicUri.Scheme -ne "https") {
   throw "PublicBaseUrl deve ser uma URL HTTPS absoluta."
 }
-if ($publicUri.Port -ne $Port) {
-  throw "A porta de PublicBaseUrl deve ser a mesma porta do processo ($Port)."
+if ($publicUri.AbsolutePath -ne "/" -or $publicUri.Query -or $publicUri.Fragment) {
+  throw "PublicBaseUrl nao deve conter caminho, query ou fragmento."
 }
 
 New-Item -ItemType Directory -Force -Path $runtimeDirectory | Out-Null
 $overrides = [ordered]@{
   ENVIRONMENT = "production"
-  HOST = "0.0.0.0"
+  HOST = $(if ($BehindNginx) { "127.0.0.1" } else { "0.0.0.0" })
   PORT = "$Port"
   APP_BASE_URL = $PublicBaseUrl.TrimEnd("/")
   ADMIN_BASE_URL = $PublicBaseUrl.TrimEnd("/")
@@ -133,6 +140,7 @@ finally {
 $state = [ordered]@{
   processId = $process.Id
   url = $PublicBaseUrl.TrimEnd("/")
+  localHealthUrl = "https://127.0.0.1:$Port"
   port = $Port
   startedAt = [DateTime]::UtcNow.ToString("o")
   entry = $entry
@@ -146,7 +154,7 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
   if ($process.HasExited) {
     break
   }
-  if (Test-Health -BaseUrl $PublicBaseUrl) {
+  if (Test-Health -BaseUrl "https://127.0.0.1:$Port") {
     $healthy = $true
     break
   }
@@ -255,7 +263,8 @@ function Show-Status {
     Write-Host "LinkGov HTTPS nao esta ativo."
     return
   }
-  $healthy = Test-Health -BaseUrl $state.url
+  $healthBaseUrl = if ($state.localHealthUrl) { $state.localHealthUrl } else { "https://127.0.0.1:$($state.port)" }
+  $healthy = Test-Health -BaseUrl $healthBaseUrl
   Write-Host "Status: $(if ($healthy) { 'saudavel' } else { 'processo ativo, health indisponivel' })"
   Write-Host "URL: $($state.url)"
   Write-Host "PID: $($process.ProcessId)"

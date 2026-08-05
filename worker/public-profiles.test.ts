@@ -55,6 +55,56 @@ describe("public profile entry route", () => {
     expect(queries[0]).toMatch(/WHERE public = 1 ORDER BY created_at ASC/);
   });
 
+  it("rebases persisted localhost images to the active HTTPS asset endpoint", async () => {
+    const profile = {
+      id: "profile-sport",
+      user_id: "admin",
+      slug: "secretaria-de-esporte",
+      title: "Secretaria de esporte",
+      description: "Pagina institucional inicial.",
+      avatar: "http://localhost:8787/api/assets/profile-sport/avatar/avatar.png",
+      banner: "http://localhost:8787/api/assets/profile-sport/banner/banner.jpg",
+      primary_color: "#001e40",
+      secondary_color: "#005db6",
+      theme: "institucional",
+      button_radius: 16,
+      font_family: "Inter",
+      public: 1
+    };
+    const database = {
+      prepare() {
+        const statement = {
+          bind() {
+            return statement;
+          },
+          async first() {
+            return profile;
+          },
+          async all() {
+            return { success: true, results: [], meta: { changes: 0 } };
+          }
+        };
+        return statement;
+      }
+    } as unknown as D1Database;
+
+    const response = await app.request("https://10.170.1.27:9443/api/profiles/secretaria-de-esporte", undefined, {
+      DB: database,
+      ENVIRONMENT: "production",
+      AUTH_PROVIDER: "sim",
+      APP_BASE_URL: "https://10.170.1.27:9443",
+      ASSET_BASE_URL: "https://10.170.1.27:9443/api/assets"
+    } as Bindings);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      profile: {
+        avatar: "https://10.170.1.27:9443/api/assets/profile-sport/avatar/avatar.png",
+        banner: "https://10.170.1.27:9443/api/assets/profile-sport/banner/banner.jpg"
+      }
+    });
+  });
+
   it("records a public view with an idempotent event identifier", async () => {
     const queries: string[] = [];
     const profile = {

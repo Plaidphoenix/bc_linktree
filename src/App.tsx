@@ -56,10 +56,12 @@ import {
   X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { runtimeConfig, usesManagedSession } from "./config/runtime";
 import { DEMO_EMAIL, DEMO_PASSWORD } from "./data/seed";
 import {
   ApiError,
+  approveSimAccessRequest,
   createLink,
   createProfile,
   createUser,
@@ -71,10 +73,12 @@ import {
   getAdminState,
   getAnalytics,
   getPublicProfile,
+  getSimAccessRequests,
   getUsers,
   login,
   logout,
   requestPasswordReset,
+  rejectSimAccessRequest,
   reorderLinks,
   resetPassword,
   sessionStore,
@@ -86,7 +90,17 @@ import {
   uploadProfileAsset
 } from "./services/api";
 import { accessSessionStore, asReadOnlyAdminState } from "./services/access-session";
-import type { AdminPermissions, AdminState, Analytics, LinkItem, PublicProfile, Toast, User, UserStatus } from "./types";
+import type {
+  AdminPermissions,
+  AdminState,
+  Analytics,
+  LinkItem,
+  PublicProfile,
+  SimAccessRequest,
+  Toast,
+  User,
+  UserStatus
+} from "./types";
 import { createId } from "./utils/id";
 
 type AdminSection = "links" | "appearance" | "analytics" | "pages" | "users" | "settings";
@@ -497,6 +511,9 @@ function PublicProfilePage({ slug, navigate }: { slug?: string; navigate: (to: s
   const [links, setLinks] = useState<LinkItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [availabilityError, setAvailabilityError] = useState(false);
+  const [cachedAt, setCachedAt] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
   const viewEvent = useRef({ route: "", id: "" });
   const routeKey = slug || "__default__";
 
@@ -506,27 +523,40 @@ function PublicProfilePage({ slug, navigate }: { slug?: string; navigate: (to: s
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError("");
     const viewId = viewEvent.current.id;
-    getPublicProfile(slug)
-      .then((data) => {
+
+    const loadProfile = async (showLoading: boolean) => {
+      if (showLoading) setLoading(true);
+      setError("");
+      setAvailabilityError(false);
+
+      try {
+        const data = await getPublicProfile(slug);
         if (cancelled) return;
         setProfile(data.profile);
         setLinks(data.links);
+        setCachedAt(data.source === "cache" ? data.cachedAt || new Date().toISOString() : null);
         document.title = `${data.profile.title} | LinkGov Institutional`;
-        void trackView(data.profile.id, viewId);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Perfil nao encontrado.");
-      })
-      .finally(() => {
+        if (data.source === "network") {
+          void trackView(data.profile.id, viewId).catch(() => undefined);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setAvailabilityError(err instanceof ApiError && (err.status === 0 || err.status >= 500));
+        setError(err instanceof Error ? err.message : "Perfil nao encontrado.");
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    };
+
+    const handleOnline = () => void loadProfile(false);
+    void loadProfile(true);
+    window.addEventListener("online", handleOnline);
     return () => {
       cancelled = true;
+      window.removeEventListener("online", handleOnline);
     };
-  }, [slug]);
+  }, [retryKey, slug]);
 
   if (loading) {
     return <LoadingState label="Carregando pagina publica..." />;
@@ -535,10 +565,14 @@ function PublicProfilePage({ slug, navigate }: { slug?: string; navigate: (to: s
   if (error || !profile) {
     return (
       <EmptyState
-        title="Pagina nao encontrada"
-        description={error || "Este perfil nao esta publico ou nao existe."}
-        actionLabel="Ir para login"
-        onAction={() => navigate("/login")}
+        title={availabilityError ? "Servidor temporariamente indisponivel" : "Pagina nao encontrada"}
+        description={
+          availabilityError
+            ? "Nao ha uma copia desta pagina neste dispositivo. Verifique se o servidor esta ativo e tente novamente."
+            : error || "Este perfil nao esta publico ou nao existe."
+        }
+        actionLabel={availabilityError ? "Tentar novamente" : "Ir para login"}
+        onAction={() => (availabilityError ? setRetryKey((value) => value + 1) : navigate("/login"))}
       />
     );
   }
@@ -560,6 +594,14 @@ function PublicProfilePage({ slug, navigate }: { slug?: string; navigate: (to: s
           <UserRound size={18} /> Painel
         </button>
       </header>
+      {cachedAt ? (
+        <div className="public-connection-banner" role="status">
+          <WifiOff size={20} />
+          <span>
+            Servidor temporariamente indisponivel. Exibindo a ultima versao salva em {formatSnapshotTime(cachedAt)}.
+          </span>
+        </div>
+      ) : null}
       <section className="public-card">
         <div className="public-banner">
           <img src={profile.banner} alt="" />
@@ -592,8 +634,8 @@ function PublicLinkButton({ link, profile }: { link: LinkItem; profile: PublicPr
   const Icon = getIcon(link.icon);
 
   const openLink = async () => {
-    await trackClick(link);
     window.open(link.url, "_blank", "noopener,noreferrer");
+    void trackClick(link).catch(() => undefined);
   };
 
   return (
@@ -620,6 +662,7 @@ function PublicLinkButton({ link, profile }: { link: LinkItem; profile: PublicPr
 
 function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: string }) {
   const [state, setState] = useState<AdminState | null>(null);
+  const [accessRequests, setAccessRequests] = useState<SimAccessRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [offline, setOffline] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -688,6 +731,42 @@ function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: st
     }, 3600);
   }, []);
 
+  useEffect(() => {
+    if (!state?.permissions.canManageUsers || offline) {
+      return;
+    }
+
+    let cancelled = false;
+    let errorReported = false;
+    const loadRequests = async () => {
+      try {
+        const requests = await getSimAccessRequests();
+        if (!cancelled) {
+          setAccessRequests(requests);
+          errorReported = false;
+        }
+      } catch (error) {
+        if (!cancelled && !errorReported) {
+          errorReported = true;
+          pushToast(
+            error instanceof Error ? error.message : "Nao foi possivel atualizar as solicitacoes de acesso.",
+            "error"
+          );
+        }
+      }
+    };
+
+    const refreshOnFocus = () => void loadRequests();
+    void loadRequests();
+    const poll = window.setInterval(loadRequests, 30_000);
+    window.addEventListener("focus", refreshOnFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(poll);
+      window.removeEventListener("focus", refreshOnFocus);
+    };
+  }, [offline, pushToast, state?.permissions.canManageUsers]);
+
   const exit = async () => {
     await logout();
     if (runtimeConfig.authProvider === "access") {
@@ -711,6 +790,22 @@ function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: st
     }
   };
 
+  const approveAccessRequest = async (
+    requestId: string,
+    payload: Parameters<typeof approveSimAccessRequest>[1]
+  ) => {
+    const created = await approveSimAccessRequest(requestId, payload);
+    setAccessRequests((items) => items.filter((item) => item.id !== requestId));
+    pushToast(`${created.name} recebeu acesso como ${created.role}.`);
+    return created;
+  };
+
+  const rejectAccessRequest = async (requestId: string) => {
+    await rejectSimAccessRequest(requestId);
+    setAccessRequests((items) => items.filter((item) => item.id !== requestId));
+    pushToast("Solicitacao de acesso recusada.", "info");
+  };
+
   if (loading || !state) {
     return <LoadingState label="Carregando painel administrativo..." />;
   }
@@ -728,9 +823,13 @@ function AdminApp({ navigate, path }: { navigate: (to: string) => void; path: st
           profile={state.profile}
           profiles={state.profiles}
           permissions={state.permissions}
+          accessRequests={accessRequests}
+          links={state.links}
           navigate={navigate}
           onLogout={exit}
           onProfileChange={switchProfile}
+          onApproveAccessRequest={approveAccessRequest}
+          onRejectAccessRequest={rejectAccessRequest}
           readOnly={offline}
         />
         {offline ? (
@@ -816,20 +915,60 @@ function AdminHeader({
   profile,
   profiles,
   permissions,
+  accessRequests,
+  links,
   navigate,
   onLogout,
   onProfileChange,
+  onApproveAccessRequest,
+  onRejectAccessRequest,
   readOnly
 }: {
   user: User;
   profile: PublicProfile;
   profiles: PublicProfile[];
   permissions: AdminPermissions;
+  accessRequests: SimAccessRequest[];
+  links: LinkItem[];
   navigate: (to: string) => void;
   onLogout: () => void;
   onProfileChange: (profileId: string) => void;
+  onApproveAccessRequest: (
+    requestId: string,
+    payload: Parameters<typeof approveSimAccessRequest>[1]
+  ) => Promise<User>;
+  onRejectAccessRequest: (requestId: string) => Promise<void>;
   readOnly: boolean;
 }) {
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [reviewing, setReviewing] = useState<SimAccessRequest | null>(null);
+  const notificationsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!notificationsOpen) return;
+
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target as Node)) {
+        setNotificationsOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setNotificationsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [notificationsOpen]);
+
+  useEffect(() => {
+    if (reviewing && !accessRequests.some((request) => request.id === reviewing.id)) {
+      setReviewing(null);
+    }
+  }, [accessRequests, reviewing]);
+
   return (
     <header className="admin-header">
       <div>
@@ -854,10 +993,71 @@ function AdminHeader({
           <Eye size={18} />
           <span className="sr-only">Ver pagina publica</span>
         </button>
-        <button className="icon-button">
-          <Bell size={18} />
-          <span className="sr-only">Notificacoes</span>
-        </button>
+        {permissions.canManageUsers ? (
+          <div className="notification-hub" ref={notificationsRef}>
+            <button
+              className={`icon-button notification-trigger ${notificationsOpen ? "selected" : ""}`}
+              aria-label={`Notificacoes: ${accessRequests.length} solicitacoes pendentes`}
+              aria-expanded={notificationsOpen}
+              aria-controls="access-request-notifications"
+              onClick={() => setNotificationsOpen((open) => !open)}
+            >
+              <Bell size={18} />
+              {accessRequests.length ? (
+                <span className="notification-count" aria-hidden="true">
+                  {accessRequests.length > 99 ? "99+" : accessRequests.length}
+                </span>
+              ) : null}
+            </button>
+            {notificationsOpen ? (
+              <section className="notification-popover" id="access-request-notifications" aria-label="Solicitacoes de acesso">
+                <div className="notification-popover-header">
+                  <div>
+                    <strong>Solicitacoes de acesso</strong>
+                    <span>Identidades validadas pelo SIM</span>
+                  </div>
+                  <button className="icon-button ghost" onClick={() => setNotificationsOpen(false)}>
+                    <X size={17} />
+                    <span className="sr-only">Fechar notificacoes</span>
+                  </button>
+                </div>
+                {accessRequests.length ? (
+                  <div className="notification-list">
+                    {accessRequests.map((request) => (
+                      <button
+                        className="notification-row"
+                        key={request.id}
+                        onClick={() => {
+                          setReviewing(request);
+                          setNotificationsOpen(false);
+                        }}
+                      >
+                        <span className="notification-person" aria-hidden="true">
+                          <UserRound size={18} />
+                        </span>
+                        <span className="notification-copy">
+                          <strong>{request.displayName}</strong>
+                          {request.institutionalEmail ? <span>{request.institutionalEmail}</span> : null}
+                          <small>
+                            {formatAccessRequestTime(request.lastAttemptAt)}
+                            {request.attemptsCount > 1 ? ` · ${request.attemptsCount} tentativas` : ""}
+                          </small>
+                        </span>
+                        <ChevronRight size={17} aria-hidden="true" />
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="notification-empty">
+                    <CheckCircle2 size={22} />
+                    <strong>Nenhuma solicitacao pendente</strong>
+                    <span>Novas identidades aparecerao aqui.</span>
+                  </div>
+                )}
+              </section>
+            ) : null}
+          </div>
+        ) : null}
         <button className="avatar-button" onClick={onLogout} title="Sair">
           <img src={user.avatar || "/assets/crest.svg"} alt="" />
         </button>
@@ -882,8 +1082,226 @@ function AdminHeader({
           </select>
         </label>
       ) : null}
+      {reviewing
+        ? createPortal(
+            <SimAccessReviewDialog
+              key={reviewing.id}
+              request={reviewing}
+              profile={profile}
+              links={links}
+              readOnly={readOnly}
+              onClose={() => setReviewing(null)}
+              onApprove={onApproveAccessRequest}
+              onReject={onRejectAccessRequest}
+            />,
+            document.body
+          )
+        : null}
     </header>
   );
+}
+
+function SimAccessReviewDialog({
+  request,
+  profile,
+  links,
+  readOnly,
+  onClose,
+  onApprove,
+  onReject
+}: {
+  request: SimAccessRequest;
+  profile: PublicProfile;
+  links: LinkItem[];
+  readOnly: boolean;
+  onClose: () => void;
+  onApprove: (requestId: string, payload: Parameters<typeof approveSimAccessRequest>[1]) => Promise<User>;
+  onReject: (requestId: string) => Promise<void>;
+}) {
+  const [role, setRole] = useState<User["role"]>("EDITOR");
+  const [email, setEmail] = useState(request.institutionalEmail || "");
+  const [username, setUsername] = useState("");
+  const [linkIds, setLinkIds] = useState<string[]>([]);
+  const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
+  const [confirmReject, setConfirmReject] = useState(false);
+  const [error, setError] = useState("");
+
+  const approve = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError("");
+    setBusy("approve");
+    try {
+      await onApprove(request.id, {
+        role,
+        ...(role === "ADMIN" ? {} : { profileId: profile.id }),
+        ...(role === "EDITOR" ? { linkIds } : {}),
+        ...(email.trim() ? { email: email.trim() } : {}),
+        ...(username.trim() ? { username: username.trim() } : {})
+      });
+      onClose();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Nao foi possivel aprovar esta solicitacao.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const reject = async () => {
+    if (!confirmReject) {
+      setConfirmReject(true);
+      return;
+    }
+    setError("");
+    setBusy("reject");
+    try {
+      await onReject(request.id);
+      onClose();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Nao foi possivel recusar esta solicitacao.");
+      setConfirmReject(false);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="sim-access-review-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !busy) onClose();
+      }}
+    >
+      <div className="modal-card access-review-modal">
+        <div className="access-review-heading">
+          <div>
+            <span className="eyebrow">Identidade validada pelo SIM</span>
+            <h3 id="sim-access-review-title">Revisar acesso</h3>
+          </div>
+          <button className="icon-button ghost" type="button" onClick={onClose} disabled={Boolean(busy)}>
+            <X size={18} />
+            <span className="sr-only">Fechar revisao</span>
+          </button>
+        </div>
+        <div className="access-request-identity">
+          <span aria-hidden="true"><UserRound size={20} /></span>
+          <div>
+            <strong>{request.displayName}</strong>
+            <small>{request.institutionalEmail || "E-mail nao informado pelo SIM"}</small>
+          </div>
+        </div>
+        {readOnly ? <AlertBanner tone="info">Reconecte o sistema para revisar esta solicitacao.</AlertBanner> : null}
+        {error ? <AlertBanner tone="error">{error}</AlertBanner> : null}
+        <form className="access-review-form" onSubmit={approve}>
+          <label>
+            <span>Papel no LinkGov</span>
+            <select
+              value={role}
+              disabled={Boolean(busy) || readOnly}
+              onChange={(event) => {
+                setRole(event.target.value as User["role"]);
+                setConfirmReject(false);
+              }}
+            >
+              <option value="ADMIN">Administrador</option>
+              <option value="GESTOR">Gestor</option>
+              <option value="EDITOR">Editor</option>
+            </select>
+          </label>
+          <div className="form-grid compact-grid">
+            <label>
+              <span>E-mail institucional (opcional)</span>
+              <input
+                type="email"
+                value={email}
+                disabled={Boolean(busy) || readOnly}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="nome@bc.sc.gov.br"
+              />
+            </label>
+            <label>
+              <span>Nome de usuario (opcional)</span>
+              <input
+                value={username}
+                disabled={Boolean(busy) || readOnly}
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder="Gerado automaticamente"
+                maxLength={80}
+              />
+            </label>
+          </div>
+          {role === "ADMIN" ? (
+            <div className="access-scope-summary">
+              <ShieldCheck size={20} />
+              <div>
+                <strong>Acesso administrativo global</strong>
+                <span>Podera administrar todas as paginas e usuarios.</span>
+              </div>
+            </div>
+          ) : (
+            <div className="access-scope-summary">
+              <Building2 size={20} />
+              <div>
+                <strong>{profile.title}</strong>
+                <span>O acesso sera limitado a pagina selecionada no topo do painel.</span>
+              </div>
+            </div>
+          )}
+          {role === "EDITOR" ? (
+            <div className="link-permission-box access-link-permissions">
+              <span>Links que este editor podera alterar</span>
+              {links.length ? (
+                links.map((link) => (
+                  <label className="checkbox-row" key={link.id}>
+                    <input
+                      type="checkbox"
+                      checked={linkIds.includes(link.id)}
+                      disabled={Boolean(busy) || readOnly}
+                      onChange={(event) =>
+                        setLinkIds((items) =>
+                          event.target.checked ? [...items, link.id] : items.filter((item) => item !== link.id)
+                        )
+                      }
+                    />
+                    <span>{link.title}</span>
+                  </label>
+                ))
+              ) : (
+                <p className="help-text">Esta pagina ainda nao possui links para autorizar.</p>
+              )}
+            </div>
+          ) : null}
+          <div className="modal-actions access-review-actions">
+            <button
+              type="button"
+              className="danger-action"
+              disabled={Boolean(busy) || readOnly}
+              onClick={reject}
+            >
+              <X size={16} />
+              {busy === "reject" ? "Recusando..." : confirmReject ? "Confirmar recusa" : "Recusar acesso"}
+            </button>
+            <button className="primary-action compact" type="submit" disabled={Boolean(busy) || readOnly}>
+              <Check size={16} /> {busy === "approve" ? "Aprovando..." : "Aprovar acesso"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function formatAccessRequestTime(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "Agora";
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
 }
 
 function OfflineAdminSection() {
@@ -2172,6 +2590,17 @@ function getIcon(icon: string) {
 
 function formatNumber(value: number) {
   return Intl.NumberFormat("pt-BR", { notation: value > 9999 ? "compact" : "standard" }).format(value);
+}
+
+function formatSnapshotTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "um acesso anterior";
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
 }
 
 function slugFromText(value: string) {

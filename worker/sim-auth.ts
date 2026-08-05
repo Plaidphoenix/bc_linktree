@@ -16,6 +16,8 @@ export type SimAuthBindings = {
 
 export type SimIdentity = {
   subject: string;
+  displayName?: string;
+  institutionalEmail?: string;
 };
 
 export class SimAuthError extends Error {
@@ -139,7 +141,7 @@ export function extractSimIdentity(env: SimAuthBindings, token: string): SimIden
 
   const claimName = safeClaimName(env.SIM_SUBJECT_CLAIM) || "ref_cod_usuario";
   const subject = stringValue(payload[claimName]);
-  if (!subject || subject.length > 160) {
+  if (!/^[A-Za-z0-9._:@-]{1,160}$/.test(subject)) {
     throw new SimAuthError(
       "A identidade institucional nao possui o identificador esperado.",
       502,
@@ -147,7 +149,14 @@ export function extractSimIdentity(env: SimAuthBindings, token: string): SimIden
     );
   }
 
-  return { subject };
+  const displayName = firstSafeDisplayName(payload.nome, payload.name);
+  const institutionalEmail = firstSafeEmail(payload.email, payload.mail, payload.upn);
+
+  return {
+    subject,
+    ...(displayName ? { displayName } : {}),
+    ...(institutionalEmail ? { institutionalEmail } : {})
+  };
 }
 
 export async function encryptSimToken(env: SimAuthBindings, token: string) {
@@ -320,6 +329,31 @@ function stringValue(value: unknown) {
 function safeClaimName(value: unknown) {
   const name = String(value || "").trim();
   return /^[A-Za-z0-9_.:-]{1,80}$/.test(name) ? name : "";
+}
+
+function firstSafeDisplayName(...values: unknown[]) {
+  for (const value of values) {
+    const name = stringValue(value)
+      .replace(/[<>]/g, "")
+      .replace(/[\u0000-\u001f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 160);
+    if (name) {
+      return name;
+    }
+  }
+  return "";
+}
+
+function firstSafeEmail(...values: unknown[]) {
+  for (const value of values) {
+    const email = stringValue(value).toLowerCase().slice(0, 254);
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return email;
+    }
+  }
+  return "";
 }
 
 function simClientType(env: SimAuthBindings) {

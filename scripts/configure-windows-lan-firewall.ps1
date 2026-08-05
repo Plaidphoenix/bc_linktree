@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [ValidateRange(1024, 65535)]
+  [ValidateRange(1, 65535)]
   [int]$Port = 9443,
   [string]$RemoteAddress = "",
   [switch]$Apply
